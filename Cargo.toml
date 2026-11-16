@@ -13,7 +13,7 @@ version = "0.0.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["draM. Contributors"]
-repository = "https://example.com/dram"
+repository = "https://github.com/MOzcelik14/draM"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

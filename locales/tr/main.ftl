@@ -168,3 +168,12 @@ unsaved-message = Belgede kaydedilmemiş değişiklikler var. Kapatmadan önce k
 btn-save-and-close = Kaydet
 btn-discard-close = Kaydetmeden Kapat
 btn-cancel = İptal
+
+recovery-title = Kurtarma Dosyası Bulundu
+recovery-message = Beklenmedik bir kapanmadan kalan kaydedilmemiş bir oturum bulundu. Kurtarmak ister misiniz?
+btn-recover = Kurtar
+btn-discard-recovery = Yoksay
+
+fmt-bold = Kalın (Ctrl+B)
+fmt-italic = İtalik (Ctrl+I)
+fmt-underline = Altı Çizili (Ctrl+U)

@@ -168,3 +168,12 @@ unsaved-message = You have unsaved changes. Do you want to save before closing?
 btn-save-and-close = Save
 btn-discard-close = Close Without Saving
 btn-cancel = Cancel
+
+recovery-title = Recovery File Found
+recovery-message = An unsaved session from an unexpected exit was found. Would you like to recover it?
+btn-recover = Recover
+btn-discard-recovery = Discard
+
+fmt-bold = Bold (Ctrl+B)
+fmt-italic = Italic (Ctrl+I)
+fmt-underline = Underline (Ctrl+U)

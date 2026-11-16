@@ -8,17 +8,18 @@ mod theme;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use chrono::Utc;
 use dram_core::text::{cmp_tr, contains_case_insensitive};
 use dram_core::{
     paginate, Document, DualDialogueGroup, DualSide, EditCommand, ElementType, LayoutProfile, Note,
-    PageSize, RevisionMark, ScriptLanguage, TextRun, UndoManager,
+    PageSize, PaginatedDocument, RevisionMark, ScriptLanguage, TextRun, UndoManager,
 };
 use dram_format::{
-    load_dram, load_fadein, load_fdx, parse_fountain, remove_recovery, save_dram, save_fadein,
-    save_fdx, serialize_fountain,
+    load_dram, load_fadein, load_fdx, parse_fountain, recovery_path_for, remove_recovery,
+    save_dram, save_fadein, save_fdx, serialize_fountain, write_recovery,
 };
 use dram_pdf::export_pdf_file;
 use dram_print::{
@@ -92,6 +93,10 @@ struct DramApp {
     print_page_range_input: String,
     last_print_pdf: Option<PathBuf>,
     print_status: Option<String>,
+    cached_pagination: PaginatedDocument,
+    pagination_dirty: bool,
+    last_autosave: Instant,
+    pending_recovery_path: Option<PathBuf>,
 }
 
 impl DramApp {
@@ -100,8 +105,13 @@ impl DramApp {
             UiLanguage::Tr => ScriptLanguage::Tr,
             UiLanguage::En => ScriptLanguage::En,
         };
+        let doc = Document::new(script_lang);
+        let profile = LayoutProfile::for_page_size(doc.settings.page_size);
+        let cached_pagination = paginate(&doc, &profile);
+        let unsaved_rec = recovery_path_for(&std::env::temp_dir().join("dram_unsaved.dram"));
+        let pending_recovery_path = unsaved_rec.exists().then_some(unsaved_rec);
         Self {
-            doc: Document::new(script_lang),
+            doc,
             undo: UndoManager::new(),
             editor: EditorState::default(),
             i18n,
@@ -128,7 +138,30 @@ impl DramApp {
             print_page_range_input: String::new(),
             last_print_pdf: None,
             print_status: None,
+            cached_pagination,
+            pagination_dirty: false,
+            last_autosave: Instant::now(),
+            pending_recovery_path,
         }
+    }
+
+    fn mark_dirty(&mut self) {
+        self.dirty = true;
+        self.pagination_dirty = true;
+    }
+
+    fn ensure_pagination(&mut self) {
+        if self.pagination_dirty {
+            let profile = LayoutProfile::for_page_size(self.doc.settings.page_size);
+            self.cached_pagination = paginate(&self.doc, &profile);
+            self.pagination_dirty = false;
+        }
+    }
+
+    fn active_recovery_base_path(&self) -> PathBuf {
+        self.current_path
+            .clone()
+            .unwrap_or_else(|| std::env::temp_dir().join("dram_unsaved.dram"))
     }
 
     fn new_document(&mut self) {
@@ -137,6 +170,7 @@ impl DramApp {
         self.editor = EditorState::default();
         self.current_path = None;
         self.dirty = false;
+        self.pagination_dirty = true;
         self.status_error = None;
     }
 
@@ -149,11 +183,14 @@ impl DramApp {
         };
         match load_dram(&path) {
             Ok(loaded) => {
+                let rec = recovery_path_for(&path);
+                self.pending_recovery_path = rec.exists().then_some(rec);
                 self.doc = loaded;
                 self.undo.clear();
                 self.editor = EditorState::default();
                 self.current_path = Some(path);
                 self.dirty = false;
+                self.pagination_dirty = true;
                 self.status_error = None;
             }
             Err(err) => {
@@ -190,6 +227,7 @@ impl DramApp {
         match save_dram(path, &self.doc) {
             Ok(()) => {
                 let _ = remove_recovery(path);
+                let _ = remove_recovery(&std::env::temp_dir().join("dram_unsaved.dram"));
                 self.current_path = Some(path.to_path_buf());
                 self.dirty = false;
                 self.status_error = None;
@@ -215,7 +253,7 @@ impl DramApp {
                 self.undo.clear();
                 self.editor = EditorState::default();
                 self.current_path = None;
-                self.dirty = true;
+                self.mark_dirty();
                 self.status_error = None;
             }
             Err(err) => {
@@ -281,7 +319,7 @@ impl DramApp {
                 self.undo.clear();
                 self.editor = EditorState::default();
                 self.current_path = None;
-                self.dirty = true;
+                self.mark_dirty();
                 self.status_error = None;
             }
             Err(err) => {
@@ -545,7 +583,7 @@ impl DramApp {
                     )
                     .is_ok()
                 {
-                    self.dirty = true;
+                    self.mark_dirty();
                     self.find_next();
                 }
                 return;
@@ -596,7 +634,7 @@ impl DramApp {
                 .execute(&mut self.doc, EditCommand::Batch(cmds))
                 .is_ok()
             {
-                self.dirty = true;
+                self.mark_dirty();
                 self.find_status = None;
             }
         } else {
@@ -608,8 +646,8 @@ impl DramApp {
         if !self.show_navigator {
             return;
         }
-        let profile = LayoutProfile::for_page_size(self.doc.settings.page_size);
-        let paged = paginate(&self.doc, &profile);
+        self.ensure_pagination();
+        let total_pages = self.cached_pagination.page_count();
 
         let dock_frame =
             egui::Frame::side_top_panel(&ctx.style()).inner_margin(egui::Margin::same(10));
@@ -707,7 +745,7 @@ impl DramApp {
                         } else {
                             format!("{num}{heading}")
                         };
-                        let page_num = element_page_number(&paged, idx);
+                        let page_num = element_page_number(&self.cached_pagination, idx);
                         scenes.push((idx, self.doc.elements.len(), label, String::new(), page_num));
                     } else if el.kind == ElementType::Action {
                         if let Some(cur) = scenes.last_mut() {
@@ -795,7 +833,7 @@ impl DramApp {
 
                                     let mut page_args = FluentArgs::new();
                                     page_args.set("current", *page_num);
-                                    page_args.set("total", paged.page_count());
+                                    page_args.set("total", total_pages);
                                     let sub_color = if is_current {
                                         egui::Color32::from_rgb(235, 215, 215)
                                     } else {
@@ -827,7 +865,7 @@ impl DramApp {
                 ui.separator();
                 let mut page_args = FluentArgs::new();
                 page_args.set("current", active_page);
-                page_args.set("total", paged.page_count());
+                page_args.set("total", total_pages);
                 ui.label(
                     egui::RichText::new(self.i18n.t_args("page-x-of-y", &page_args))
                         .small()
@@ -885,7 +923,7 @@ impl DramApp {
                     )
                     .is_ok()
             {
-                self.dirty = true;
+                self.mark_dirty();
                 self.editor.pending_focus = Some(self.editor.focused_index);
             }
         }
@@ -927,7 +965,7 @@ impl DramApp {
                         )
                         .is_ok()
                     {
-                        self.dirty = true;
+                        self.mark_dirty();
                         self.editor.pending_focus = Some(idx);
                     }
                 }
@@ -975,10 +1013,11 @@ impl DramApp {
                 body: String::new(),
                 created_at: Utc::now(),
             });
-            self.dirty = true;
+            self.mark_dirty();
         }
         ui.add_space(6.0);
         let mut delete_idx: Option<usize> = None;
+        let mut notes_changed = false;
         for (idx, note) in self.doc.notes.iter_mut().enumerate() {
             ui.group(|ui| {
                 ui.horizontal(|ui| {
@@ -990,7 +1029,7 @@ impl DramApp {
                         )
                         .changed()
                     {
-                        self.dirty = true;
+                        notes_changed = true;
                     }
                     if ui.small_button(self.i18n.t("notes-delete")).clicked() {
                         delete_idx = Some(idx);
@@ -1005,14 +1044,17 @@ impl DramApp {
                     )
                     .changed()
                 {
-                    self.dirty = true;
+                    notes_changed = true;
                 }
             });
             ui.add_space(4.0);
         }
+        if notes_changed {
+            self.mark_dirty();
+        }
         if let Some(i) = delete_idx {
             self.doc.notes.remove(i);
-            self.dirty = true;
+            self.mark_dirty();
         }
     }
 
@@ -1045,7 +1087,7 @@ impl DramApp {
             if self.doc.settings.show_scene_numbers {
                 self.doc.renumber_scenes();
             }
-            self.dirty = true;
+            self.mark_dirty();
         }
     }
 
@@ -1059,6 +1101,7 @@ impl DramApp {
             .resizable(true)
             .default_width(420.0)
             .show(ctx, |ui| {
+                let mut tp_changed = false;
                 egui::Grid::new("title_page_grid")
                     .num_columns(2)
                     .spacing([12.0, 8.0])
@@ -1078,7 +1121,7 @@ impl DramApp {
                                     .changed()
                             };
                             if changed {
-                                self.dirty = true;
+                                tp_changed = true;
                             }
                             ui.end_row();
                         };
@@ -1090,6 +1133,9 @@ impl DramApp {
                         row("tp-contact", &mut tp.contact, true);
                         row("tp-copyright", &mut tp.copyright, false);
                     });
+                if tp_changed {
+                    self.mark_dirty();
+                }
                 ui.add_space(8.0);
                 if ui.button(self.i18n.t("btn-close")).clicked() {
                     self.show_title_page_editor = false;
@@ -1113,7 +1159,7 @@ impl DramApp {
                 self.undo.clear();
                 self.editor = EditorState::default();
                 self.current_path = None;
-                self.dirty = true;
+                self.mark_dirty();
                 self.status_error = None;
             }
             Err(err) => {
@@ -1175,7 +1221,7 @@ impl DramApp {
                     el.dual_dialogue = None;
                 }
             }
-            self.dirty = true;
+            self.mark_dirty();
             return;
         }
 
@@ -1216,7 +1262,7 @@ impl DramApp {
                     break;
                 }
             }
-            self.dirty = true;
+            self.mark_dirty();
         }
     }
 
@@ -1240,10 +1286,10 @@ impl DramApp {
             self.save_current();
         }
         if undo_pressed && self.undo.undo(&mut self.doc).is_ok() {
-            self.dirty = true;
+            self.mark_dirty();
         }
         if redo_pressed && self.undo.redo(&mut self.doc).is_ok() {
-            self.dirty = true;
+            self.mark_dirty();
         }
         if find_pressed {
             self.show_find_replace = true;
@@ -1343,6 +1389,8 @@ impl DramApp {
                         }
                     }
                     if ui.button(self.i18n.t("btn-discard-close")).clicked() {
+                        let _ = remove_recovery(&self.active_recovery_base_path());
+                        let _ = remove_recovery(&std::env::temp_dir().join("dram_unsaved.dram"));
                         self.show_unsaved_dialog = false;
                         self.allow_close = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1356,13 +1404,69 @@ impl DramApp {
             self.show_unsaved_dialog = false;
         }
     }
+
+    fn show_recovery_window(&mut self, ctx: &egui::Context) {
+        let Some(rec_path) = self.pending_recovery_path.clone() else {
+            return;
+        };
+        let mut open = true;
+        egui::Window::new(self.i18n.t("recovery-title"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                ui.label(self.i18n.t("recovery-message"));
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if ui.button(self.i18n.t("btn-recover")).clicked() {
+                        match load_dram(&rec_path) {
+                            Ok(loaded) => {
+                                self.doc = loaded;
+                                self.undo.clear();
+                                self.editor = EditorState::default();
+                                self.mark_dirty();
+                                self.status_error = None;
+                            }
+                            Err(err) => {
+                                let mut args = FluentArgs::new();
+                                args.set("reason", err.to_string());
+                                self.status_error =
+                                    Some(self.i18n.t_args("error-open-failed", &args));
+                            }
+                        }
+                        let _ = fs::remove_file(&rec_path);
+                        self.pending_recovery_path = None;
+                    }
+                    if ui.button(self.i18n.t("btn-discard-recovery")).clicked() {
+                        let _ = fs::remove_file(&rec_path);
+                        self.pending_recovery_path = None;
+                    }
+                });
+            });
+        if !open {
+            self.pending_recovery_path = None;
+        }
+    }
 }
 
 impl eframe::App for DramApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if ctx.input(|i| i.viewport().close_requested()) && self.dirty && !self.allow_close {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.show_unsaved_dialog = true;
+        if ctx.input(|i| i.viewport().close_requested()) {
+            if self.dirty && !self.allow_close {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.show_unsaved_dialog = true;
+            } else {
+                let _ = remove_recovery(&self.active_recovery_base_path());
+                let _ = remove_recovery(&std::env::temp_dir().join("dram_unsaved.dram"));
+            }
+        }
+
+        if self.dirty && self.last_autosave.elapsed() >= Duration::from_secs(15) {
+            let base = self.active_recovery_base_path();
+            let _ = write_recovery(&base, &self.doc);
+            self.last_autosave = Instant::now();
         }
 
         theme::apply_theme(ctx, self.dark_theme);
@@ -1444,7 +1548,7 @@ impl eframe::App for DramApp {
                                 .clicked()
                             {
                                 if self.undo.undo(&mut self.doc).is_ok() {
-                                    self.dirty = true;
+                                    self.mark_dirty();
                                 }
                                 ui.close_menu();
                             }
@@ -1454,7 +1558,7 @@ impl eframe::App for DramApp {
                                 .clicked()
                             {
                                 if self.undo.redo(&mut self.doc).is_ok() {
-                                    self.dirty = true;
+                                    self.mark_dirty();
                                 }
                                 ui.close_menu();
                             }
@@ -1520,7 +1624,7 @@ impl eframe::App for DramApp {
                                         )
                                         .is_ok()
                                 {
-                                    self.dirty = true;
+                                    self.mark_dirty();
                                     ui.close_menu();
                                 }
                             }
@@ -1538,7 +1642,7 @@ impl eframe::App for DramApp {
                             }
                             if ui.button(self.i18n.t("menu-renumber-scenes")).clicked() {
                                 self.doc.renumber_scenes();
-                                self.dirty = true;
+                                self.mark_dirty();
                                 ui.close_menu();
                             }
                             ui.separator();
@@ -1551,7 +1655,7 @@ impl eframe::App for DramApp {
                                 .clicked()
                             {
                                 self.doc.settings.page_size = PageSize::A4;
-                                self.dirty = true;
+                                self.mark_dirty();
                             }
                             if ui
                                 .selectable_label(
@@ -1561,7 +1665,7 @@ impl eframe::App for DramApp {
                                 .clicked()
                             {
                                 self.doc.settings.page_size = PageSize::UsLetter;
-                                self.dirty = true;
+                                self.mark_dirty();
                             }
                             ui.separator();
                             if ui
@@ -1574,7 +1678,7 @@ impl eframe::App for DramApp {
                                 if self.doc.settings.show_scene_numbers {
                                     self.doc.renumber_scenes();
                                 }
-                                self.dirty = true;
+                                self.mark_dirty();
                             }
                         });
 
@@ -1609,7 +1713,7 @@ impl eframe::App for DramApp {
                                 .clicked()
                             {
                                 self.doc.settings.set_script_language(ScriptLanguage::Tr);
-                                self.dirty = true;
+                                self.mark_dirty();
                             }
                             if ui
                                 .selectable_label(
@@ -1619,7 +1723,7 @@ impl eframe::App for DramApp {
                                 .clicked()
                             {
                                 self.doc.settings.set_script_language(ScriptLanguage::En);
-                                self.dirty = true;
+                                self.mark_dirty();
                             }
                         });
 
@@ -1666,7 +1770,7 @@ impl eframe::App for DramApp {
                                             )
                                             .is_ok()
                                     {
-                                        self.dirty = true;
+                                        self.mark_dirty();
                                     }
                                 }
                             });
@@ -1710,7 +1814,7 @@ impl eframe::App for DramApp {
                                                 color: c.to_string(),
                                                 label: String::new(),
                                             });
-                                            self.dirty = true;
+                                            self.mark_dirty();
                                         }
                                     }
                                 }
@@ -1782,11 +1886,10 @@ impl eframe::App for DramApp {
 
                         ui.separator();
 
-                        let profile = LayoutProfile::for_page_size(self.doc.settings.page_size);
-                        let paged = paginate(&self.doc, &profile);
+                        self.ensure_pagination();
                         let mut page_args = FluentArgs::new();
-                        page_args.set("pages", paged.page_count());
-                        page_args.set("minutes", paged.estimated_minutes());
+                        page_args.set("pages", self.cached_pagination.page_count());
+                        page_args.set("minutes", self.cached_pagination.estimated_minutes());
                         ui.label(self.i18n.t_args("status-pages-runtime", &page_args));
 
                         ui.separator();
@@ -1829,7 +1932,7 @@ impl eframe::App for DramApp {
                     &self.i18n,
                     self.dark_theme,
                 ) {
-                    self.dirty = true;
+                    self.mark_dirty();
                 }
             });
 
@@ -1839,6 +1942,7 @@ impl eframe::App for DramApp {
         self.show_shortcuts_window(ctx);
         self.show_about_window(ctx);
         self.show_unsaved_close_window(ctx);
+        self.show_recovery_window(ctx);
     }
 }
 

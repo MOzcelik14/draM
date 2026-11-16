@@ -935,6 +935,7 @@ name = "dram-pdf"
 version = "0.0.1"
 dependencies = [
  "dram-core",
+ "dram-format",
  "krilla",
  "thiserror 2.0.21",
  "ttf-parser",

@@ -13,3 +13,7 @@ dram-core = { path = "../dram-core" }
 krilla = { workspace = true }
 ttf-parser = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+dram-format = { path = "../dram-format" }
+

@@ -1,7 +1,9 @@
 //! Custom screenplay editor widget with Final Draft-style Tab/Enter flow.
 
 use dram_core::text::{cmp_tr, to_lower_for_lang, to_upper_for_lang};
-use dram_core::{Document, DualSide, EditCommand, Element, ElementType, TextRun, UndoManager};
+use dram_core::{
+    Document, DualSide, EditCommand, Element, ElementType, InlineStyle, TextRun, UndoManager,
+};
 use eframe::egui;
 
 use crate::i18n::I18n;
@@ -145,6 +147,16 @@ impl EditorState {
             ui.separator();
         }
 
+        if let Some(attr) = detect_inline_format_shortcut(ui.ctx()) {
+            if toggle_element_inline_style(doc, undo, self.focused_index, attr) {
+                modified = true;
+            }
+        }
+
+        let total_elements = doc.elements.len();
+        let (window_start, window_end) = compute_element_window(total_elements, self.focused_index);
+        const EST_ROW_HEIGHT: f32 = 28.0;
+
         let mut action_after_loop: Option<EditorAction> = None;
 
         egui::ScrollArea::vertical()
@@ -169,7 +181,11 @@ impl EditorState {
                                 ui.set_width(content_width);
                                 ui.set_min_height(680.0);
 
-                                for idx in 0..doc.elements.len() {
+                                if window_start > 0 {
+                                    ui.add_space(window_start as f32 * EST_ROW_HEIGHT);
+                                }
+
+                                for idx in window_start..window_end {
                                     let el = &doc.elements[idx];
                                     let el_id = el.id;
                                     let kind = el.kind;
@@ -353,11 +369,10 @@ impl EditorState {
                                                             cleaned
                                                         };
                                                     let old_runs = doc.elements[idx].runs.clone();
-                                                    let new_runs = if final_text.is_empty() {
-                                                        Vec::new()
-                                                    } else {
-                                                        vec![TextRun::plain(final_text)]
-                                                    };
+                                                    let new_runs = update_runs_preserving_styles(
+                                                        &old_runs,
+                                                        &final_text,
+                                                    );
                                                     if old_runs != new_runs
                                                         && undo
                                                             .execute(
@@ -376,6 +391,12 @@ impl EditorState {
                                             });
                                         });
                                     ui.add_space(4.0);
+                                }
+
+                                if window_end < total_elements {
+                                    ui.add_space(
+                                        (total_elements - window_end) as f32 * EST_ROW_HEIGHT,
+                                    );
                                 }
                             });
                         });
@@ -564,5 +585,282 @@ fn revision_egui_color(name: &str) -> egui::Color32 {
         "yellow" => egui::Color32::from_rgb(240, 210, 75),
         "green" => egui::Color32::from_rgb(100, 210, 120),
         _ => egui::Color32::GRAY,
+    }
+}
+
+/// Inline text attribute toggled via keyboard shortcuts (`Ctrl+B`, `Ctrl+I`, `Ctrl+U`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InlineFormatAttr {
+    Bold,
+    Italic,
+    Underline,
+}
+
+fn detect_inline_format_shortcut(ctx: &egui::Context) -> Option<InlineFormatAttr> {
+    ctx.input_mut(|input| {
+        if !input.modifiers.command || input.modifiers.alt || input.modifiers.shift {
+            return None;
+        }
+        if input.consume_key(egui::Modifiers::COMMAND, egui::Key::B) {
+            Some(InlineFormatAttr::Bold)
+        } else if input.consume_key(egui::Modifiers::COMMAND, egui::Key::I) {
+            Some(InlineFormatAttr::Italic)
+        } else if input.consume_key(egui::Modifiers::COMMAND, egui::Key::U) {
+            Some(InlineFormatAttr::Underline)
+        } else {
+            None
+        }
+    })
+}
+
+/// Toggles an inline style attribute across all runs of the element at `index`.
+pub fn toggle_element_inline_style(
+    doc: &mut Document,
+    undo: &mut UndoManager,
+    index: usize,
+    attr: InlineFormatAttr,
+) -> bool {
+    let Some(el) = doc.elements.get(index) else {
+        return false;
+    };
+    if el.runs.is_empty() {
+        return false;
+    }
+
+    let all_set = el.runs.iter().all(|r| match attr {
+        InlineFormatAttr::Bold => r.style.bold,
+        InlineFormatAttr::Italic => r.style.italic,
+        InlineFormatAttr::Underline => r.style.underline,
+    });
+    let target = !all_set;
+
+    let old_runs = el.runs.clone();
+    let new_runs: Vec<TextRun> = old_runs
+        .iter()
+        .map(|r| {
+            let mut style = r.style;
+            match attr {
+                InlineFormatAttr::Bold => style.bold = target,
+                InlineFormatAttr::Italic => style.italic = target,
+                InlineFormatAttr::Underline => style.underline = target,
+            }
+            TextRun {
+                text: r.text.clone(),
+                style,
+            }
+        })
+        .collect();
+
+    if old_runs == new_runs {
+        return false;
+    }
+
+    undo.break_coalescing();
+    undo.execute(
+        doc,
+        EditCommand::UpdateRuns {
+            index,
+            old_runs,
+            new_runs,
+        },
+    )
+    .is_ok()
+}
+
+/// Computes a virtualized render window `(start, end)` around `focused_index` for large scripts.
+#[must_use]
+pub fn compute_element_window(total: usize, focused_index: usize) -> (usize, usize) {
+    const VIRTUALIZE_THRESHOLD: usize = 120;
+    const WINDOW_RADIUS: usize = 60;
+    if total <= VIRTUALIZE_THRESHOLD {
+        return (0, total);
+    }
+    let clamped_focus = focused_index.min(total.saturating_sub(1));
+    let start = clamped_focus.saturating_sub(WINDOW_RADIUS);
+    let end = (clamped_focus + WINDOW_RADIUS + 1).min(total);
+    (start, end)
+}
+
+/// Updates `old_runs` with `final_text` while preserving existing [`InlineStyle`]s
+/// on single-run elements and untouched prefix/suffix runs on multi-run elements.
+#[must_use]
+pub fn update_runs_preserving_styles(old_runs: &[TextRun], final_text: &str) -> Vec<TextRun> {
+    if final_text.is_empty() {
+        return Vec::new();
+    }
+    if old_runs.is_empty() {
+        return vec![TextRun::plain(final_text)];
+    }
+    if old_runs.len() == 1 {
+        return vec![TextRun {
+            text: final_text.to_string(),
+            style: old_runs[0].style,
+        }];
+    }
+
+    let old_plain: String = old_runs.iter().map(|r| r.text.as_str()).collect();
+    if old_plain == final_text {
+        return old_runs.to_vec();
+    }
+
+    let prefix_len = common_char_prefix_bytes(&old_plain, final_text);
+    let suffix_len = common_char_suffix_bytes(&old_plain[prefix_len..], &final_text[prefix_len..]);
+    let old_suffix_start = old_plain.len() - suffix_len;
+    let new_suffix_start = final_text.len() - suffix_len;
+
+    let mut result: Vec<TextRun> = Vec::new();
+    let mut cursor = 0usize;
+    let mut mid_style = old_runs.last().map_or(InlineStyle::PLAIN, |r| r.style);
+
+    for run in old_runs {
+        let run_start = cursor;
+        let run_end = cursor + run.text.len();
+        cursor = run_end;
+
+        if prefix_len >= run_start && prefix_len <= run_end {
+            mid_style = run.style;
+        }
+
+        let p_end = prefix_len.min(run_end);
+        if p_end > run_start {
+            push_merged_run(&mut result, &old_plain[run_start..p_end], run.style);
+        }
+    }
+
+    if new_suffix_start > prefix_len {
+        push_merged_run(
+            &mut result,
+            &final_text[prefix_len..new_suffix_start],
+            mid_style,
+        );
+    }
+
+    cursor = 0;
+    for run in old_runs {
+        let run_start = cursor;
+        let run_end = cursor + run.text.len();
+        cursor = run_end;
+
+        let s_start = old_suffix_start.max(run_start);
+        if run_end > s_start {
+            push_merged_run(&mut result, &old_plain[s_start..run_end], run.style);
+        }
+    }
+
+    result
+}
+
+fn push_merged_run(out: &mut Vec<TextRun>, slice: &str, style: InlineStyle) {
+    if slice.is_empty() {
+        return;
+    }
+    if let Some(last) = out.last_mut() {
+        if last.style == style {
+            last.text.push_str(slice);
+            return;
+        }
+    }
+    out.push(TextRun {
+        text: slice.to_string(),
+        style,
+    });
+}
+
+fn common_char_prefix_bytes(a: &str, b: &str) -> usize {
+    a.char_indices()
+        .zip(b.chars())
+        .take_while(|((_, ca), cb)| ca == cb)
+        .map(|((idx, ca), _)| idx + ca.len_utf8())
+        .last()
+        .unwrap_or(0)
+}
+
+fn common_char_suffix_bytes(a: &str, b: &str) -> usize {
+    a.chars()
+        .rev()
+        .zip(b.chars().rev())
+        .take_while(|(ca, cb)| ca == cb)
+        .map(|(ca, _)| ca.len_utf8())
+        .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preserves_single_and_multi_run_styles_on_edit() {
+        let bold = InlineStyle {
+            bold: true,
+            ..InlineStyle::PLAIN
+        };
+        let italic = InlineStyle {
+            italic: true,
+            ..InlineStyle::PLAIN
+        };
+        let old = vec![
+            TextRun {
+                text: "Merhaba ".to_string(),
+                style: bold,
+            },
+            TextRun {
+                text: "dünya".to_string(),
+                style: italic,
+            },
+        ];
+
+        let updated = update_runs_preserving_styles(&old, "Merhaba güzel dünya");
+        assert_eq!(updated.len(), 2);
+        assert_eq!(updated[0].text, "Merhaba ");
+        assert_eq!(updated[0].style, bold);
+        assert_eq!(updated[1].text, "güzel dünya");
+        assert_eq!(updated[1].style, italic);
+    }
+
+    #[test]
+    fn toggle_inline_style_uses_undo_and_toggles_bold_italic_underline() {
+        let mut doc = Document::new(dram_core::ScriptLanguage::Tr);
+        let mut undo = UndoManager::new();
+        doc.elements[0] = Element::new(ElementType::Action, "Şehir uyuyor.");
+
+        assert!(toggle_element_inline_style(
+            &mut doc,
+            &mut undo,
+            0,
+            InlineFormatAttr::Bold
+        ));
+        assert!(doc.elements[0].runs[0].style.bold);
+
+        assert!(toggle_element_inline_style(
+            &mut doc,
+            &mut undo,
+            0,
+            InlineFormatAttr::Italic
+        ));
+        assert!(doc.elements[0].runs[0].style.bold);
+        assert!(doc.elements[0].runs[0].style.italic);
+
+        assert!(toggle_element_inline_style(
+            &mut doc,
+            &mut undo,
+            0,
+            InlineFormatAttr::Underline
+        ));
+        assert!(doc.elements[0].runs[0].style.underline);
+
+        assert!(toggle_element_inline_style(
+            &mut doc,
+            &mut undo,
+            0,
+            InlineFormatAttr::Bold
+        ));
+        assert!(!doc.elements[0].runs[0].style.bold);
+    }
+
+    #[test]
+    fn element_window_virtualizes_above_threshold() {
+        assert_eq!(compute_element_window(80, 10), (0, 80));
+        assert_eq!(compute_element_window(500, 200), (140, 261));
+        assert_eq!(compute_element_window(500, 0), (0, 61));
     }
 }
