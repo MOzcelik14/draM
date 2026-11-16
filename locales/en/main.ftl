@@ -155,3 +155,15 @@ shortcuts-body = Enter: Insert next element type
     Ctrl+F: Find / Replace
     Ctrl+P: Print
     F11: Focus Mode
+
+menu-about = About draM....
+about-title = About draM.
+about-version = Version { $version }
+about-desc = Desktop screenplay writing application built for Turkish and English scripts.
+about-license = License: MIT / Apache-2.0 | Font: Courier Prime (SIL OFL 1.1)
+
+unsaved-title = Unsaved Changes
+unsaved-message = You have unsaved changes. Do you want to save before closing?
+btn-save-and-close = Save
+btn-discard-close = Close Without Saving
+btn-cancel = Cancel

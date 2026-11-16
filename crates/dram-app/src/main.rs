@@ -73,6 +73,9 @@ struct DramApp {
     status_error: Option<String>,
     show_title_page_editor: bool,
     show_shortcuts_dialog: bool,
+    show_about_dialog: bool,
+    show_unsaved_dialog: bool,
+    allow_close: bool,
     show_navigator: bool,
     inspector_tab: InspectorTab,
     dark_theme: bool,
@@ -106,6 +109,9 @@ impl DramApp {
             status_error: None,
             show_title_page_editor: false,
             show_shortcuts_dialog: false,
+            show_about_dialog: false,
+            show_unsaved_dialog: false,
+            allow_close: false,
             show_navigator: true,
             inspector_tab: InspectorTab::Format,
             dark_theme: true,
@@ -1268,10 +1274,85 @@ impl DramApp {
             self.show_shortcuts_dialog = false;
         }
     }
+
+    fn show_about_window(&mut self, ctx: &egui::Context) {
+        if !self.show_about_dialog {
+            return;
+        }
+        let mut open = self.show_about_dialog;
+        egui::Window::new(self.i18n.t("about-title"))
+            .open(&mut open)
+            .resizable(false)
+            .default_width(380.0)
+            .show(ctx, |ui| {
+                ui.heading("draM.");
+                let mut ver_args = FluentArgs::new();
+                ver_args.set("version", env!("CARGO_PKG_VERSION"));
+                ui.label(egui::RichText::new(self.i18n.t_args("about-version", &ver_args)).weak());
+                ui.add_space(8.0);
+                ui.label(self.i18n.t("about-desc"));
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(self.i18n.t("about-license"))
+                        .small()
+                        .weak(),
+                );
+                ui.add_space(12.0);
+                if ui.button(self.i18n.t("btn-close")).clicked() {
+                    self.show_about_dialog = false;
+                }
+            });
+        if !open {
+            self.show_about_dialog = false;
+        }
+    }
+
+    fn show_unsaved_close_window(&mut self, ctx: &egui::Context) {
+        if !self.show_unsaved_dialog {
+            return;
+        }
+        let mut open = self.show_unsaved_dialog;
+        egui::Window::new(self.i18n.t("unsaved-title"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .default_width(400.0)
+            .show(ctx, |ui| {
+                ui.label(self.i18n.t("unsaved-message"));
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if ui.button(self.i18n.t("btn-save-and-close")).clicked() {
+                        self.save_current();
+                        if !self.dirty {
+                            self.show_unsaved_dialog = false;
+                            self.allow_close = true;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                    }
+                    if ui.button(self.i18n.t("btn-discard-close")).clicked() {
+                        self.show_unsaved_dialog = false;
+                        self.allow_close = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    if ui.button(self.i18n.t("btn-cancel")).clicked() {
+                        self.show_unsaved_dialog = false;
+                    }
+                });
+            });
+        if !open {
+            self.show_unsaved_dialog = false;
+        }
+    }
 }
 
 impl eframe::App for DramApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if ctx.input(|i| i.viewport().close_requested()) && self.dirty && !self.allow_close {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.show_unsaved_dialog = true;
+        }
+
         theme::apply_theme(ctx, self.dark_theme);
         normalize_linux_ime_events(ctx);
 
@@ -1533,6 +1614,11 @@ impl eframe::App for DramApp {
                                 self.show_shortcuts_dialog = true;
                                 ui.close_menu();
                             }
+                            ui.separator();
+                            if ui.button(self.i18n.t("menu-about")).clicked() {
+                                self.show_about_dialog = true;
+                                ui.close_menu();
+                            }
                         });
                     });
 
@@ -1737,6 +1823,8 @@ impl eframe::App for DramApp {
         self.show_find_replace_window(ctx);
         self.show_print_window(ctx);
         self.show_shortcuts_window(ctx);
+        self.show_about_window(ctx);
+        self.show_unsaved_close_window(ctx);
     }
 }
 

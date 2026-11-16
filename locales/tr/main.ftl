@@ -155,3 +155,15 @@ shortcuts-body = Enter: Sonraki eleman türüne geç
     Ctrl+F: Bul / Değiştir
     Ctrl+P: Yazdır
     F11: Odaklanma Modu
+
+menu-about = draM. Hakkında...
+about-title = draM. Hakkında
+about-version = Sürüm { $version }
+about-desc = Türkçe ve İngilizce senaryolar için geliştirilmiş masaüstü senaryo yazım uygulaması.
+about-license = Lisans: MIT / Apache-2.0 | Yazı Tipi: Courier Prime (SIL OFL 1.1)
+
+unsaved-title = Kaydedilmemiş Değişiklikler
+unsaved-message = Belgede kaydedilmemiş değişiklikler var. Kapatmadan önce kaydetmek ister misiniz?
+btn-save-and-close = Kaydet
+btn-discard-close = Kaydetmeden Kapat
+btn-cancel = İptal
