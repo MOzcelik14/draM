@@ -156,33 +156,29 @@ fn submit_pdf_to_os(pdf_path: &Path, options: &PrintOptions) -> Result<(), Strin
 }
 
 #[cfg(target_os = "windows")]
-fn submit_pdf_to_os(pdf_path: &Path, _options: &PrintOptions) -> Result<(), String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows::core::PCWSTR;
-    use windows::Win32::UI::Shell::ShellExecuteW;
-    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-
-    let verb: Vec<u16> = "print\0".encode_utf16().collect();
-    let file: Vec<u16> = pdf_path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-
-    let res = unsafe {
-        ShellExecuteW(
-            None,
-            PCWSTR(verb.as_ptr()),
-            PCWSTR(file.as_ptr()),
-            PCWSTR::null(),
-            PCWSTR::null(),
-            SW_SHOWNORMAL,
-        )
-    };
-    if res.0 as isize <= 32 {
-        Err(format!("ShellExecuteW failed with code {:?}", res.0))
+fn submit_pdf_to_os(pdf_path: &Path, options: &PrintOptions) -> Result<(), String> {
+    let escaped = pdf_path.to_string_lossy().replace('\'', "''");
+    let script = if let Some(printer) = options.printer.as_deref().filter(|s| !s.trim().is_empty())
+    {
+        let p_esc = printer.replace('\'', "''");
+        format!("Start-Process -FilePath '{escaped}' -Verb PrintTo -ArgumentList '\"{p_esc}\"'")
     } else {
-        Ok(())
+        format!("Start-Process -FilePath '{escaped}' -Verb Print")
+    };
+    match Command::new("powershell")
+        .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
+        .output()
+    {
+        Ok(out) if out.status.success() => Ok(()),
+        Ok(out) => {
+            let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            Err(if err.is_empty() {
+                format!("print command exited with status {}", out.status)
+            } else {
+                err
+            })
+        }
+        Err(err) => Err(err.to_string()),
     }
 }
 

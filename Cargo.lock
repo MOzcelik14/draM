@@ -911,7 +911,6 @@ version = "0.0.1"
 dependencies = [
  "chrono",
  "serde",
- "serde_json",
  "thiserror 2.0.21",
  "unicode-segmentation",
  "uuid",
@@ -949,7 +948,6 @@ dependencies = [
  "dram-pdf",
  "thiserror 2.0.21",
  "uuid",
- "windows",
 ]
 
 [[package]]
