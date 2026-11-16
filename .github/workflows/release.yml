@@ -2,6 +2,8 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   workflow_dispatch:
@@ -13,8 +15,29 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  meta:
+    name: Resolve Release Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.ver.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ver
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG="${{ github.ref_name }}"
+            VER="${TAG#v}"
+          else
+            VER="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
+            TAG="v${VER}"
+          fi
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
   linux:
     name: Package Linux (tar.gz + deb)
+    needs: meta
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +56,7 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked -p dram-app
       - name: Package Linux artifacts
-        run: bash scripts/package-linux.sh "${{ github.ref_name }}"
+        run: bash scripts/package-linux.sh "${{ needs.meta.outputs.version }}"
       - uses: actions/upload-artifact@v4
         with:
           name: dram-linux-package
@@ -45,6 +68,7 @@ jobs:
 
   windows:
     name: Package Windows (zip)
+    needs: meta
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,12 +81,7 @@ jobs:
       - name: Package Windows ZIP
         shell: pwsh
         run: |
-          $rawVer = "${{ github.ref_name }}"
-          if ([string]::IsNullOrEmpty($rawVer) -or $rawVer -notlike "v*") {
-            $ver = (Select-String -Path "Cargo.toml" -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
-          } else {
-            $ver = $rawVer.TrimStart('v')
-          }
+          $ver = "${{ needs.meta.outputs.version }}"
           New-Item -ItemType Directory -Path dist -Force | Out-Null
           $stage = Join-Path $env:TEMP "dram-stage"
           if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
@@ -85,6 +104,7 @@ jobs:
 
   macos:
     name: Package macOS (tar.gz)
+    needs: meta
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -94,12 +114,7 @@ jobs:
         run: cargo build --release --locked -p dram-app
       - name: Package macOS archive
         run: |
-          RAW_VER="${{ github.ref_name }}"
-          if [[ -z "${RAW_VER}" || "${RAW_VER}" != v* ]]; then
-            VER="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
-          else
-            VER="${RAW_VER#v}"
-          fi
+          VER="${{ needs.meta.outputs.version }}"
           mkdir -p dist
           STAGE="$(mktemp -d)"
           PKG="${STAGE}/draM-${VER}-macos-$(uname -m)"
@@ -119,8 +134,7 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    needs: [linux, windows, macos]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [meta, linux, windows, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -138,6 +152,8 @@ jobs:
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           files: |
             dist/*.deb
             dist/*.tar.gz
