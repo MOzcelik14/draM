@@ -1,0 +1,27 @@
+[package]
+name = "dram-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Desktop GUI for draM. screenplay writer built with eframe/egui."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "dram"
+path = "src/main.rs"
+
+[dependencies]
+dram-core = { path = "../dram-core" }
+dram-format = { path = "../dram-format" }
+dram-pdf = { path = "../dram-pdf" }
+dram-print = { path = "../dram-print" }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+eframe = { workspace = true }
+fluent-bundle = { workspace = true }
+rfd = { workspace = true }
+sys-locale = { workspace = true }
+unic-langid = { workspace = true }
+uuid = { workspace = true }

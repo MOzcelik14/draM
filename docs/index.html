@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>draM. — Senaryo Yazım Uygulaması</title>
+  <meta name="description" content="Türkçe ve İngilizce senaryolar için geliştirilmiş, sade ve güvenilir masaüstü senaryo yazım uygulaması.">
+  <link rel="icon" type="image/svg+xml" href="./logo-mark.svg">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav-bar">
+      <a class="brand" href="#top">
+        <img src="./logo-mark.svg" alt="" width="30" height="30" class="brand-mark">
+        <span>draM<span class="brand-dot">.</span></span>
+      </a>
+      <nav class="nav-links" aria-label="Ana menü">
+        <a href="#features" data-i18n="nav-features">Özellikler</a>
+        <a href="#formats" data-i18n="nav-formats">Formatlar</a>
+        <a href="#start" data-i18n="nav-start">Başlangıç</a>
+      </nav>
+      <div class="nav-controls">
+        <button type="button" class="seg-btn" data-lang-btn="tr" aria-pressed="true">TR</button>
+        <button type="button" class="seg-btn" data-lang-btn="en" aria-pressed="false">EN</button>
+        <button type="button" class="seg-btn" id="theme-toggle" aria-pressed="false">Tema</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="container hero-grid">
+        <div>
+          <span class="eyebrow" data-i18n="hero-eyebrow">Masaüstü Senaryo Yazım Uygulaması</span>
+          <h1 data-i18n="hero-title">Türkçe ve İngilizce senaryolar için sade, hızlı ve güvenilir çalışma alanı.</h1>
+          <p class="hero-lead" data-i18n="hero-lead">
+            draM., senaristler ve yapım ekipleri için tasarlanmış yerel bir masaüstü uygulamasıdır. Yazım akışını bozmadan endüstri standardında biçimlendirme, baskıya hazır PDF üretimi ve yaygın formatlarla tam uyum sunar.
+          </p>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="#start" data-i18n="cta-start">Kurulum ve Başlangıç</a>
+            <a class="btn btn-secondary" href="#formats" data-i18n="cta-formats">Desteklenen Formatlar</a>
+          </div>
+          <p class="hero-meta" data-i18n="hero-meta">Linux, Windows ve macOS için yerel masaüstü uygulaması. MIT / Apache-2.0 lisanslı.</p>
+        </div>
+
+        <aside class="script-sheet" aria-label="Senaryo önizlemesi">
+          <div class="sheet-chrome">
+            <span data-i18n="sheet-title">ornek_senaryo.dram — Sayfa 1</span>
+            <span data-i18n="sheet-lang">Senaryo Dili: TR</span>
+          </div>
+          <div class="sheet-body">
+            <div class="sc-heading">
+              <span data-i18n="sc-heading">İÇ. KAFE - GECE</span>
+              <span>1</span>
+            </div>
+            <p class="sc-action" data-i18n="sc-action">
+              Yağmur İstanbul sokaklarını yıkar. ÇİĞDEM (30) pencere kenarındaki masada not defterini açar.
+            </p>
+            <div class="sc-character" data-i18n="sc-character">ÇİĞDEM</div>
+            <div class="sc-paren" data-i18n="sc-paren">(alçak sesle)</div>
+            <p class="sc-dialogue" data-i18n="sc-dialogue">
+              Bu gece her şey değişecek. İlk sahneden itibaren.
+            </p>
+            <div class="sc-transition" data-i18n="sc-transition">KESME.</div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="section" id="features">
+      <div class="container">
+        <div class="section-head">
+          <h2 data-i18n="feat-title">Yazım Sürecine Odaklanan Mimari</h2>
+          <p data-i18n="feat-sub">Karmaşık menüler ve dikkat dağıtıcı araçlar yerine doğrudan senaryo üretimine hizmet eden temel araçlar.</p>
+        </div>
+        <div class="feature-grid">
+          <article class="card">
+            <h3 data-i18n="f1-title">Akışkan Senaryo Editörü</h3>
+            <p data-i18n="f1-desc">Enter ve Tab tuşlarıyla sahne başlığı, aksiyon, karakter, parantez içi ve diyalog arasında kesintisiz geçiş. Ctrl+1–8 kısayollarıyla anında tür değişimi.</p>
+          </article>
+          <article class="card">
+            <h3 data-i18n="f2-title">Birinci Sınıf Türkçe ve İngilizce</h3>
+            <p data-i18n="f2-desc">Arayüz dili ve senaryo dili birbirinden bağımsızdır. Türkçe İ/i ve I/ı büyük-küçük harf kuralları, Türkçe alfabe sıralaması ve yerel terimler (İÇ., DIŞ., DEVAM) yerleşiktir.</p>
+          </article>
+          <article class="card">
+            <h3 data-i18n="f3-title">Baskıya Hazır PDF ve Yazdırma</h3>
+            <p data-i18n="f3-desc">Courier Prime yazı tipi gömülü, A4 ve US Letter uyumlu, başlık sayfalı ve sayfa bölünmelerinde otomatik (DEVAM)/(MORE) işaretli PDF üretimi.</p>
+          </article>
+          <article class="card">
+            <h3 data-i18n="f4-title">Sahne Gezgini, Notlar ve Revizyonlar</h3>
+            <p data-i18n="f4-desc">Sahneler arasında tek tıkla gezinin, sahne bloklarını geri alınabilir şekilde sıralayın, çalışma notları ekleyin ve revizyon renkleriyle değişiklikleri izleyin.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="formats">
+      <div class="container">
+        <div class="section-head">
+          <h2 data-i18n="fmt-title">Format Uyumluluğu</h2>
+          <p data-i18n="fmt-sub">Projelerinizi açık ve güvenli .dram arşivinde saklayın; sektördeki diğer yazılımlarla sorunsuz dosya alışverişi yapın.</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th data-i18n="th-format">Format</th>
+                <th data-i18n="th-ext">Uzantı</th>
+                <th data-i18n="th-support">Destek</th>
+                <th data-i18n="th-notes">Açıklama</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>draM.</td>
+                <td><code>.dram</code></td>
+                <td data-i18n="f-dram-sup">Okuma / Yazma</td>
+                <td data-i18n="f-dram-note">Sürümlü ZIP arşivi, atomik kayıt ve çökme kurtarma.</td>
+              </tr>
+              <tr>
+                <td>PDF</td>
+                <td><code>.pdf</code></td>
+                <td data-i18n="f-pdf-sup">Dışa Aktarma</td>
+                <td data-i18n="f-pdf-note">Gömülü Courier Prime, A4 ve US Letter, başlık sayfası.</td>
+              </tr>
+              <tr>
+                <td>Fountain</td>
+                <td><code>.fountain</code></td>
+                <td data-i18n="f-fnt-sup">İçe / Dışa Aktarma</td>
+                <td data-i18n="f-fnt-note">Fountain 1.1 tam spesifikasyon ve Türkçe karakter uyumu.</td>
+              </tr>
+              <tr>
+                <td>Fade In</td>
+                <td><code>.fadein</code></td>
+                <td data-i18n="f-fi-sup">İçe / Dışa Aktarma</td>
+                <td data-i18n="f-fi-note">Open Screenplay Format tabanlı .fadein belge uyumu.</td>
+              </tr>
+              <tr>
+                <td>Final Draft</td>
+                <td><code>.fdx</code></td>
+                <td data-i18n="f-fdx-sup">İçe / Dışa Aktarma</td>
+                <td data-i18n="f-fdx-note">Final Draft XML belge ve temel metin stilleri uyumu.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="start">
+      <div class="container">
+        <div class="section-head">
+          <h2 data-i18n="start-title">Kurulum ve Kısayollar</h2>
+          <p data-i18n="start-sub">Sisteminizde güncel Rust araç zinciri bulunduğunda tek komutla derleyip çalıştırabilirsiniz.</p>
+        </div>
+        <div class="split-grid">
+          <article class="card">
+            <h3 data-i18n="card-install-title">Kaynaktan Çalıştırma</h3>
+            <p data-i18n="card-install-desc">Linux, Windows ve macOS üzerinde harici tarayıcı motoru veya çalışma zamanı gerektirmeden doğrudan yerel uygulama olarak çalışır.</p>
+            <pre class="code-block">cargo run -p dram-app</pre>
+          </article>
+          <article class="card">
+            <h3 data-i18n="card-keys-title">Temel Klavye Kısayolları</h3>
+            <p data-i18n="card-keys-desc">Enter: Sonraki eleman | Tab: Tür değiştir | Ctrl+1..8: Eleman seç | Ctrl+S: Kaydet | Ctrl+F: Bul/Değiştir | Ctrl+P: Yazdır | F11: Odaklanma Modu</p>
+          </article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <span data-i18n="footer-left">draM. — Senaryo Yazım Uygulaması</span>
+      <span data-i18n="footer-right">MIT / Apache-2.0 Lisansı | Courier Prime (SIL OFL 1.1)</span>
+    </div>
+  </footer>
+</body>
+</html>

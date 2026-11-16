@@ -1,0 +1,15 @@
+[package]
+name = "dram-pdf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure-Rust PDF export for draM. using krilla and embedded Courier Prime."
+
+[lints]
+workspace = true
+
+[dependencies]
+dram-core = { path = "../dram-core" }
+krilla = { workspace = true }
+ttf-parser = { workspace = true }
+thiserror = { workspace = true }

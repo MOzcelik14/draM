@@ -1,0 +1,5 @@
+/target/
+**/*.rs.bk
+*.tmp
+*.recovery
+.DS_Store

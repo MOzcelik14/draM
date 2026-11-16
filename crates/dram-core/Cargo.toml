@@ -1,0 +1,17 @@
+[package]
+name = "dram-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core screenplay document model, undo/redo, Turkish-aware text utilities, and pagination for draM."
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+unicode-segmentation = { workspace = true }
