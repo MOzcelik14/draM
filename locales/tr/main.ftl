@@ -160,6 +160,7 @@ menu-about = draM. Hakkında...
 about-title = draM. Hakkında
 about-version = Sürüm { $version }
 about-desc = Türkçe ve İngilizce senaryolar için geliştirilmiş masaüstü senaryo yazım uygulaması.
+about-suite = prisM. Suite ailesinin bir parçasıdır.
 about-license = Lisans: MIT / Apache-2.0 | Yazı Tipi: Courier Prime (SIL OFL 1.1)
 
 unsaved-title = Kaydedilmemiş Değişiklikler

@@ -1301,6 +1301,8 @@ impl DramApp {
                 });
                 ui.add_space(10.0);
                 ui.label(self.i18n.t("about-desc"));
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new(self.i18n.t("about-suite")).weak());
                 ui.add_space(6.0);
                 ui.label(
                     egui::RichText::new(self.i18n.t("about-license"))

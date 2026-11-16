@@ -160,6 +160,7 @@ menu-about = About draM....
 about-title = About draM.
 about-version = Version { $version }
 about-desc = Desktop screenplay writing application built for Turkish and English scripts.
+about-suite = Part of the prisM. Suite.
 about-license = License: MIT / Apache-2.0 | Font: Courier Prime (SIL OFL 1.1)
 
 unsaved-title = Unsaved Changes

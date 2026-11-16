@@ -4,7 +4,7 @@
 
 # draM.
 
-**draM.**, senaristler, yönetmenler ve yapım ekipleri için geliştirilmiş, Türkçe ve İngilizce senaryo yazım kurallarını doğrudan destekleyen masaüstü senaryo yazım uygulamasıdır.
+**draM.**, [prisM. Suite](https://github.com/MOzcelik14/prism-suite) ailesinin bir parçası olarak senaristler, yönetmenler ve yapım ekipleri için geliştirilmiş, Türkçe ve İngilizce senaryo yazım kurallarını doğrudan destekleyen masaüstü senaryo yazım uygulamasıdır.
 
 Yalnızca yazı yazmaya odaklanan sade arayüzü, otomatik biçimlendirme akışı, endüstri standardında PDF çıktısı ve yaygın senaryo formatlarıyla tam uyumluluğuyla projelerinizi tek bir çalışma alanında yönetmenizi sağlar.
 
