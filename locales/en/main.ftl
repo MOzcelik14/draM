@@ -137,3 +137,21 @@ tab-locations = Locations
 tab-notes = Notes
 page-x-of-y = Page { $current } of { $total }
 empty-list = No entries yet.
+
+menu-view = View
+menu-format = Format
+menu-document = Document
+menu-help = Help
+menu-import = Import
+menu-export = Export
+menu-renumber-scenes = Renumber Scenes
+menu-shortcuts = Keyboard Shortcuts...
+shortcuts-title = Keyboard Shortcuts
+shortcuts-body = Enter: Insert next element type
+    Tab: Cycle current element type
+    Ctrl+1..8: Select element type directly
+    Ctrl+S: Save project
+    Ctrl+Z / Ctrl+Y: Undo / Redo
+    Ctrl+F: Find / Replace
+    Ctrl+P: Print
+    F11: Focus Mode

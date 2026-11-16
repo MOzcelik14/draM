@@ -137,3 +137,21 @@ tab-locations = Mekânlar
 tab-notes = Notlar
 page-x-of-y = Sayfa { $current } / { $total }
 empty-list = Henüz kayıt yok.
+
+menu-view = Görünüm
+menu-format = Biçim
+menu-document = Belge
+menu-help = Yardım
+menu-import = İçe Aktar
+menu-export = Dışa Aktar
+menu-renumber-scenes = Sahneleri Yeniden Numarala
+menu-shortcuts = Klavye Kısayolları...
+shortcuts-title = Klavye Kısayolları
+shortcuts-body = Enter: Sonraki eleman türüne geç
+    Tab: Mevcut eleman türünü değiştir
+    Ctrl+1..8: Eleman türünü doğrudan seç
+    Ctrl+S: Projeyi kaydet
+    Ctrl+Z / Ctrl+Y: Geri Al / Yinele
+    Ctrl+F: Bul / Değiştir
+    Ctrl+P: Yazdır
+    F11: Odaklanma Modu

@@ -72,6 +72,7 @@ struct DramApp {
     dirty: bool,
     status_error: Option<String>,
     show_title_page_editor: bool,
+    show_shortcuts_dialog: bool,
     show_navigator: bool,
     inspector_tab: InspectorTab,
     dark_theme: bool,
@@ -104,6 +105,7 @@ impl DramApp {
             dirty: false,
             status_error: None,
             show_title_page_editor: false,
+            show_shortcuts_dialog: false,
             show_navigator: true,
             inspector_tab: InspectorTab::Format,
             dark_theme: true,
@@ -1246,11 +1248,32 @@ impl DramApp {
             self.focus_mode = !self.focus_mode;
         }
     }
+    fn show_shortcuts_window(&mut self, ctx: &egui::Context) {
+        if !self.show_shortcuts_dialog {
+            return;
+        }
+        let mut open = self.show_shortcuts_dialog;
+        egui::Window::new(self.i18n.t("shortcuts-title"))
+            .open(&mut open)
+            .resizable(false)
+            .default_width(380.0)
+            .show(ctx, |ui| {
+                ui.label(self.i18n.t("shortcuts-body"));
+                ui.add_space(10.0);
+                if ui.button(self.i18n.t("btn-close")).clicked() {
+                    self.show_shortcuts_dialog = false;
+                }
+            });
+        if !open {
+            self.show_shortcuts_dialog = false;
+        }
+    }
 }
 
 impl eframe::App for DramApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         theme::apply_theme(ctx, self.dark_theme);
+        normalize_linux_ime_events(ctx);
 
         self.handle_global_shortcuts(ctx);
 
@@ -1280,42 +1303,41 @@ impl eframe::App for DramApp {
                                 ui.close_menu();
                             }
                             ui.separator();
-                            if ui.button(self.i18n.t("menu-title-page")).clicked() {
-                                self.show_title_page_editor = true;
-                                ui.close_menu();
-                            }
+                            ui.menu_button(self.i18n.t("menu-import"), |ui| {
+                                if ui.button(self.i18n.t("menu-import-fountain")).clicked() {
+                                    self.import_fountain();
+                                    ui.close_menu();
+                                }
+                                if ui.button(self.i18n.t("menu-import-fadein")).clicked() {
+                                    self.import_fadein();
+                                    ui.close_menu();
+                                }
+                                if ui.button(self.i18n.t("menu-import-fdx")).clicked() {
+                                    self.import_fdx();
+                                    ui.close_menu();
+                                }
+                            });
+                            ui.menu_button(self.i18n.t("menu-export"), |ui| {
+                                if ui.button(self.i18n.t("menu-export-pdf")).clicked() {
+                                    self.export_pdf();
+                                    ui.close_menu();
+                                }
+                                if ui.button(self.i18n.t("menu-export-fountain")).clicked() {
+                                    self.export_fountain();
+                                    ui.close_menu();
+                                }
+                                if ui.button(self.i18n.t("menu-export-fadein")).clicked() {
+                                    self.export_fadein();
+                                    ui.close_menu();
+                                }
+                                if ui.button(self.i18n.t("menu-export-fdx")).clicked() {
+                                    self.export_fdx();
+                                    ui.close_menu();
+                                }
+                            });
                             ui.separator();
-                            if ui.button(self.i18n.t("menu-import-fountain")).clicked() {
-                                self.import_fountain();
-                                ui.close_menu();
-                            }
-                            if ui.button(self.i18n.t("menu-export-fountain")).clicked() {
-                                self.export_fountain();
-                                ui.close_menu();
-                            }
-                            if ui.button(self.i18n.t("menu-export-pdf")).clicked() {
-                                self.export_pdf();
-                                ui.close_menu();
-                            }
                             if ui.button(self.i18n.t("menu-print")).clicked() {
                                 self.open_print_dialog();
-                                ui.close_menu();
-                            }
-                            ui.separator();
-                            if ui.button(self.i18n.t("menu-import-fadein")).clicked() {
-                                self.import_fadein();
-                                ui.close_menu();
-                            }
-                            if ui.button(self.i18n.t("menu-export-fadein")).clicked() {
-                                self.export_fadein();
-                                ui.close_menu();
-                            }
-                            if ui.button(self.i18n.t("menu-import-fdx")).clicked() {
-                                self.import_fdx();
-                                ui.close_menu();
-                            }
-                            if ui.button(self.i18n.t("menu-export-fdx")).clicked() {
-                                self.export_fdx();
                                 ui.close_menu();
                             }
                         });
@@ -1345,6 +1367,119 @@ impl eframe::App for DramApp {
                             if ui.button(self.i18n.t("menu-find-replace")).clicked() {
                                 self.show_find_replace = true;
                                 ui.close_menu();
+                            }
+                        });
+
+                        ui.menu_button(self.i18n.t("menu-view"), |ui| {
+                            if ui
+                                .checkbox(&mut self.show_navigator, self.i18n.t("nav-toggle"))
+                                .changed()
+                            {
+                                ui.close_menu();
+                            }
+                            if ui
+                                .checkbox(&mut self.focus_mode, self.i18n.t("focus-mode-toggle"))
+                                .changed()
+                            {
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            ui.label(self.i18n.t("theme-label"));
+                            if ui
+                                .selectable_label(self.dark_theme, self.i18n.t("theme-dark"))
+                                .clicked()
+                            {
+                                self.dark_theme = true;
+                            }
+                            if ui
+                                .selectable_label(!self.dark_theme, self.i18n.t("theme-light"))
+                                .clicked()
+                            {
+                                self.dark_theme = false;
+                            }
+                        });
+
+                        ui.menu_button(self.i18n.t("menu-format"), |ui| {
+                            let current_kind = self
+                                .doc
+                                .elements
+                                .get(self.editor.focused_index)
+                                .map_or(ElementType::Action, |e| e.kind);
+                            for (idx, &kind) in ELEMENT_TYPES.iter().take(8).enumerate() {
+                                let label = format!(
+                                    "{}  {}",
+                                    idx + 1,
+                                    self.i18n.t(element_type_i18n_key(kind))
+                                );
+                                if ui.selectable_label(current_kind == kind, label).clicked()
+                                    && current_kind != kind
+                                    && self
+                                        .undo
+                                        .execute(
+                                            &mut self.doc,
+                                            EditCommand::ChangeElementType {
+                                                index: self.editor.focused_index,
+                                                old_kind: current_kind,
+                                                new_kind: kind,
+                                            },
+                                        )
+                                        .is_ok()
+                                {
+                                    self.dirty = true;
+                                    ui.close_menu();
+                                }
+                            }
+                            ui.separator();
+                            if ui.button(self.i18n.t("dual-dialogue-btn")).clicked() {
+                                self.toggle_dual_dialogue();
+                                ui.close_menu();
+                            }
+                        });
+
+                        ui.menu_button(self.i18n.t("menu-document"), |ui| {
+                            if ui.button(self.i18n.t("menu-title-page")).clicked() {
+                                self.show_title_page_editor = true;
+                                ui.close_menu();
+                            }
+                            if ui.button(self.i18n.t("menu-renumber-scenes")).clicked() {
+                                self.doc.renumber_scenes();
+                                self.dirty = true;
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            ui.label(self.i18n.t("page-size-label"));
+                            if ui
+                                .selectable_label(
+                                    self.doc.settings.page_size == PageSize::A4,
+                                    self.i18n.t("page-size-a4"),
+                                )
+                                .clicked()
+                            {
+                                self.doc.settings.page_size = PageSize::A4;
+                                self.dirty = true;
+                            }
+                            if ui
+                                .selectable_label(
+                                    self.doc.settings.page_size == PageSize::UsLetter,
+                                    self.i18n.t("page-size-us-letter"),
+                                )
+                                .clicked()
+                            {
+                                self.doc.settings.page_size = PageSize::UsLetter;
+                                self.dirty = true;
+                            }
+                            ui.separator();
+                            if ui
+                                .checkbox(
+                                    &mut self.doc.settings.show_scene_numbers,
+                                    self.i18n.t("show-scene-numbers"),
+                                )
+                                .changed()
+                            {
+                                if self.doc.settings.show_scene_numbers {
+                                    self.doc.renumber_scenes();
+                                }
+                                self.dirty = true;
                             }
                         });
 
@@ -1391,63 +1526,11 @@ impl eframe::App for DramApp {
                                 self.doc.settings.set_script_language(ScriptLanguage::En);
                                 self.dirty = true;
                             }
+                        });
 
-                            ui.separator();
-                            ui.label(self.i18n.t("page-size-label"));
-                            if ui
-                                .selectable_label(
-                                    self.doc.settings.page_size == PageSize::A4,
-                                    self.i18n.t("page-size-a4"),
-                                )
-                                .clicked()
-                            {
-                                self.doc.settings.page_size = PageSize::A4;
-                                self.dirty = true;
-                            }
-                            if ui
-                                .selectable_label(
-                                    self.doc.settings.page_size == PageSize::UsLetter,
-                                    self.i18n.t("page-size-us-letter"),
-                                )
-                                .clicked()
-                            {
-                                self.doc.settings.page_size = PageSize::UsLetter;
-                                self.dirty = true;
-                            }
-
-                            ui.separator();
-                            if ui
-                                .checkbox(
-                                    &mut self.doc.settings.show_scene_numbers,
-                                    self.i18n.t("show-scene-numbers"),
-                                )
-                                .changed()
-                            {
-                                if self.doc.settings.show_scene_numbers {
-                                    self.doc.renumber_scenes();
-                                }
-                                self.dirty = true;
-                            }
-
-                            ui.separator();
-                            ui.label(self.i18n.t("theme-label"));
-                            if ui
-                                .selectable_label(self.dark_theme, self.i18n.t("theme-dark"))
-                                .clicked()
-                            {
-                                self.dark_theme = true;
-                            }
-                            if ui
-                                .selectable_label(!self.dark_theme, self.i18n.t("theme-light"))
-                                .clicked()
-                            {
-                                self.dark_theme = false;
-                            }
-                            ui.separator();
-                            if ui
-                                .checkbox(&mut self.focus_mode, self.i18n.t("focus-mode-toggle"))
-                                .changed()
-                            {
+                        ui.menu_button(self.i18n.t("menu-help"), |ui| {
+                            if ui.button(self.i18n.t("menu-shortcuts")).clicked() {
+                                self.show_shortcuts_dialog = true;
                                 ui.close_menu();
                             }
                         });
@@ -1653,7 +1736,33 @@ impl eframe::App for DramApp {
         self.show_title_page_window(ctx);
         self.show_find_replace_window(ctx);
         self.show_print_window(ctx);
+        self.show_shortcuts_window(ctx);
     }
+}
+
+/// Converts orphaned `ImeEvent::Commit` events (sent by Linux X11/ibus for Turkish keys
+/// such as `ü`, `ş`, `ğ` without a preceding `Preedit`) into `Event::Text` so `egui::TextEdit`
+/// never drops them.
+fn normalize_linux_ime_events(ctx: &egui::Context) {
+    ctx.input_mut(|input| {
+        let has_preedit = input.events.iter().any(|ev| {
+            matches!(
+                ev,
+                egui::Event::Ime(egui::ImeEvent::Preedit(s)) if !s.is_empty()
+            )
+        });
+        if has_preedit {
+            return;
+        }
+        for ev in &mut input.events {
+            if let egui::Event::Ime(egui::ImeEvent::Commit(text)) = ev {
+                let committed = std::mem::take(text);
+                if !committed.is_empty() {
+                    *ev = egui::Event::Text(committed);
+                }
+            }
+        }
+    });
 }
 
 fn element_page_number(paged: &dram_core::PaginatedDocument, element_idx: usize) -> usize {

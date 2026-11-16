@@ -281,6 +281,11 @@ impl EditorState {
                                                 } else {
                                                     palette.paper_ink
                                                 };
+                                                let hint = if is_focused {
+                                                    i18n.t(element_type_i18n_key(kind))
+                                                } else {
+                                                    String::new()
+                                                };
                                                 let edit = egui::TextEdit::multiline(&mut text)
                                                     .id(widget_id)
                                                     .desired_rows(1)
@@ -290,10 +295,8 @@ impl EditorState {
                                                     .horizontal_align(align)
                                                     .text_color(text_color)
                                                     .hint_text(
-                                                        egui::RichText::new(
-                                                            i18n.t(element_type_i18n_key(kind)),
-                                                        )
-                                                        .color(palette.muted_text),
+                                                        egui::RichText::new(hint)
+                                                            .color(palette.muted_text),
                                                     );
 
                                                 let response = ui.add(edit);
