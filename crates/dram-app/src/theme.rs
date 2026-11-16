@@ -115,3 +115,183 @@ pub fn apply_theme(ctx: &egui::Context, dark: bool) {
         style.spacing.menu_margin = Margin::same(6);
     });
 }
+
+/// Draws the `draM.` Sayfa & Kadraj monogram mark at `size × size` logical pixels.
+pub fn draw_logo_mark(ui: &mut egui::Ui, size: f32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
+    let p = ui.painter();
+    let s = size / 64.0;
+    let pt = |x: f32, y: f32| egui::pos2(rect.min.x + x * s, rect.min.y + y * s);
+
+    // Base rounded square
+    p.rect(
+        rect,
+        CornerRadius::same((14.0 * s).round().max(2.0) as u8),
+        Color32::from_rgb(23, 24, 28),
+        Stroke::new((1.5 * s).max(1.0), Color32::from_rgb(44, 49, 60)),
+        egui::StrokeKind::Inside,
+    );
+
+    // Cinema viewfinder corner brackets
+    let bracket_stroke = Stroke::new((1.75 * s).max(1.0), Color32::from_rgb(90, 96, 109));
+    p.line_segment([pt(13.0, 20.0), pt(13.0, 14.0)], bracket_stroke);
+    p.line_segment([pt(13.0, 14.0), pt(19.0, 14.0)], bracket_stroke);
+    p.line_segment([pt(51.0, 20.0), pt(51.0, 14.0)], bracket_stroke);
+    p.line_segment([pt(51.0, 14.0), pt(45.0, 14.0)], bracket_stroke);
+    p.line_segment([pt(13.0, 44.0), pt(13.0, 50.0)], bracket_stroke);
+    p.line_segment([pt(13.0, 50.0), pt(19.0, 50.0)], bracket_stroke);
+    p.line_segment([pt(51.0, 44.0), pt(51.0, 50.0)], bracket_stroke);
+    p.line_segment([pt(51.0, 50.0), pt(45.0, 50.0)], bracket_stroke);
+
+    // Folded screenplay page
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            pt(21.0, 15.0),
+            pt(36.0, 15.0),
+            pt(44.0, 23.0),
+            pt(44.0, 49.0),
+            pt(21.0, 49.0),
+        ],
+        Color32::from_rgb(247, 246, 242),
+        Stroke::NONE,
+    ));
+    p.add(egui::Shape::convex_polygon(
+        vec![pt(36.0, 15.0), pt(44.0, 23.0), pt(36.0, 23.0)],
+        Color32::from_rgb(224, 178, 99),
+        Stroke::NONE,
+    ));
+
+    // Script lines & accent dot
+    if size >= 24.0 {
+        p.rect_filled(
+            egui::Rect::from_min_max(pt(25.0, 28.0), pt(39.0, 30.0)),
+            1.0,
+            Color32::from_rgb(23, 24, 28),
+        );
+        p.rect_filled(
+            egui::Rect::from_min_max(pt(25.0, 33.0), pt(36.0, 35.0)),
+            1.0,
+            Color32::from_rgb(90, 96, 109),
+        );
+        p.rect_filled(
+            egui::Rect::from_min_max(pt(28.0, 38.0), pt(37.0, 40.0)),
+            1.0,
+            Color32::from_rgb(90, 96, 109),
+        );
+    }
+    p.circle_filled(
+        pt(40.5, 43.5),
+        (2.2 * s).max(1.2),
+        Color32::from_rgb(224, 178, 99),
+    );
+}
+
+/// Generates a 64×64 RGBA window/taskbar icon matching `assets/logo-mark.svg`.
+#[must_use]
+pub fn app_icon() -> egui::IconData {
+    const W: usize = 64;
+    const H: usize = 64;
+    let mut rgba = vec![0u8; W * H * 4];
+
+    let mut set_px = |x: usize, y: usize, c: [u8; 4]| {
+        if x < W && y < H {
+            let i = (y * W + x) * 4;
+            rgba[i..i + 4].copy_from_slice(&c);
+        }
+    };
+
+    let bg = [23, 24, 28, 255];
+    let border = [44, 49, 60, 255];
+    let bracket = [90, 96, 109, 255];
+    let paper = [247, 246, 242, 255];
+    let gold = [224, 178, 99, 255];
+
+    // Rounded square (x, y in 2..62, radius 12)
+    for y in 2..62 {
+        for x in 2..62 {
+            let dx = if x < 14 {
+                14 - x
+            } else if x >= 50 {
+                x - 49
+            } else {
+                0
+            };
+            let dy = if y < 14 {
+                14 - y
+            } else if y >= 50 {
+                y - 49
+            } else {
+                0
+            };
+            let dist_sq = dx * dx + dy * dy;
+            if dist_sq <= 144 {
+                let is_border = !(3..61).contains(&x) || !(3..61).contains(&y) || dist_sq >= 121;
+                set_px(x, y, if is_border { border } else { bg });
+            }
+        }
+    }
+
+    // Viewfinder brackets
+    for (x0, y0, x1, y1) in [
+        (13, 14, 19, 15),
+        (13, 14, 14, 20),
+        (45, 14, 51, 15),
+        (50, 14, 51, 20),
+        (13, 49, 19, 50),
+        (13, 44, 14, 50),
+        (45, 49, 51, 50),
+        (50, 44, 51, 50),
+    ] {
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                set_px(x, y, bracket);
+            }
+        }
+    }
+
+    // Folded screenplay page (x: 21..44, y: 15..49, dog-ear: x+y > 36+23=59 -> top-right cut)
+    for y in 15..=49 {
+        for x in 21..=44 {
+            if x >= 36 && y <= 23 {
+                if (x - 36) <= (y - 15) {
+                    set_px(x, y, gold);
+                }
+            } else {
+                set_px(x, y, paper);
+            }
+        }
+    }
+
+    // Script lines
+    for y in 28..=29 {
+        for x in 25..=39 {
+            set_px(x, y, bg);
+        }
+    }
+    for y in 33..=34 {
+        for x in 25..=36 {
+            set_px(x, y, bracket);
+        }
+    }
+    for y in 38..=39 {
+        for x in 28..=37 {
+            set_px(x, y, bracket);
+        }
+    }
+    // Accent dot at (40, 43)
+    for y in 42..=45 {
+        for x in 39..=42 {
+            let dx = x as isize - 40;
+            let dy = y as isize - 43;
+            if dx * dx + dy * dy <= 4 {
+                set_px(x, y, gold);
+            }
+        }
+    }
+
+    egui::IconData {
+        rgba,
+        width: W as u32,
+        height: H as u32,
+    }
+}

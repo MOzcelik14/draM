@@ -40,7 +40,8 @@ fn main() -> Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1180.0, 780.0])
-            .with_min_inner_size([720.0, 480.0]),
+            .with_min_inner_size([720.0, 480.0])
+            .with_icon(theme::app_icon()),
         ..Default::default()
     };
 
@@ -1285,11 +1286,20 @@ impl DramApp {
             .resizable(false)
             .default_width(380.0)
             .show(ctx, |ui| {
-                ui.heading("draM.");
-                let mut ver_args = FluentArgs::new();
-                ver_args.set("version", env!("CARGO_PKG_VERSION"));
-                ui.label(egui::RichText::new(self.i18n.t_args("about-version", &ver_args)).weak());
-                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    theme::draw_logo_mark(ui, 48.0);
+                    ui.add_space(8.0);
+                    ui.vertical(|ui| {
+                        ui.heading("draM.");
+                        let mut ver_args = FluentArgs::new();
+                        ver_args.set("version", env!("CARGO_PKG_VERSION"));
+                        ui.label(
+                            egui::RichText::new(self.i18n.t_args("about-version", &ver_args))
+                                .weak(),
+                        );
+                    });
+                });
+                ui.add_space(10.0);
                 ui.label(self.i18n.t("about-desc"));
                 ui.add_space(6.0);
                 ui.label(
@@ -1366,6 +1376,8 @@ impl eframe::App for DramApp {
                 .frame(bar_frame)
                 .show(ctx, |ui| {
                     egui::menu::bar(ui, |ui| {
+                        theme::draw_logo_mark(ui, 18.0);
+                        ui.add_space(4.0);
                         ui.menu_button(self.i18n.t("menu-file"), |ui| {
                             if ui.button(self.i18n.t("menu-new")).clicked() {
                                 self.new_document();
