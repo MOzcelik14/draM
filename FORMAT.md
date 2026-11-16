@@ -38,7 +38,7 @@
 {
   "format_version": 1,
   "document_id": "550e8400-e29b-41d4-a716-446655440000",
-  "app_version": "0.0.1",
+  "app_version": "0.1.0",
   "saved_at": "2026-11-16T12:00:00Z",
   "embedded_assets": []
 }

@@ -1,4 +1,4 @@
-const FALLBACK_VERSION = "0.0.1";
+const FALLBACK_VERSION = "0.1.0";
 const REPO = "MOzcelik14/draM";
 
 const I18N = {
