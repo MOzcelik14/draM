@@ -45,6 +45,21 @@ jobs:
           pathlib.Path("docs/version.json").write_text(
               json.dumps({"version": ver}, indent=2) + "\n", encoding="utf-8"
           )
+
+          app_js = pathlib.Path("docs/app.js")
+          js_text = app_js.read_text(encoding="utf-8")
+          js_text = re.sub(
+              r'const FALLBACK_VERSION = "[^"]+";',
+              f'const FALLBACK_VERSION = "{ver}";',
+              js_text,
+              count=1,
+          )
+          app_js.write_text(js_text, encoding="utf-8")
+
+          index_html = pathlib.Path("docs/index.html")
+          html_text = index_html.read_text(encoding="utf-8")
+          html_text = re.sub(r'v\d+\.\d+\.\d+', f'v{ver}', html_text)
+          index_html.write_text(html_text, encoding="utf-8")
           PY
 
       - name: Setup Pages

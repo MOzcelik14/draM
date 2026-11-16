@@ -17,6 +17,7 @@
         <span>draM<span class="brand-dot">.</span></span>
       </a>
       <nav class="nav-links" aria-label="Ana menü">
+        <a href="#downloads" data-i18n="nav-downloads">İndir</a>
         <a href="#features" data-i18n="nav-features">Özellikler</a>
         <a href="#formats" data-i18n="nav-formats">Formatlar</a>
         <a href="#start" data-i18n="nav-start">Başlangıç</a>
@@ -24,7 +25,7 @@
       <div class="nav-controls">
         <button type="button" class="seg-btn" data-lang-btn="tr" aria-pressed="true">TR</button>
         <button type="button" class="seg-btn" data-lang-btn="en" aria-pressed="false">EN</button>
-        <button type="button" class="seg-btn" id="theme-toggle" aria-pressed="false">Tema</button>
+        <button type="button" class="seg-btn" id="theme-toggle" aria-pressed="false" data-i18n="theme-btn">Tema</button>
       </div>
     </div>
   </header>
@@ -33,39 +34,110 @@
     <section class="hero">
       <div class="container hero-grid">
         <div>
-          <span class="eyebrow" data-i18n="hero-eyebrow">Masaüstü Senaryo Yazım Uygulaması</span>
+          <div class="hero-badges">
+            <span class="version-pill" id="hero-version-pill">v0.0.1</span>
+            <span class="eyebrow" data-i18n="hero-eyebrow">Masaüstü Senaryo Yazım Uygulaması</span>
+          </div>
           <h1 data-i18n="hero-title">Türkçe ve İngilizce senaryolar için sade, hızlı ve güvenilir çalışma alanı.</h1>
           <p class="hero-lead" data-i18n="hero-lead">
             draM., senaristler ve yapım ekipleri için tasarlanmış yerel bir masaüstü uygulamasıdır. Yazım akışını bozmadan endüstri standardında biçimlendirme, baskıya hazır PDF üretimi ve yaygın formatlarla tam uyum sunar.
           </p>
           <div class="cta-row">
-            <a class="btn btn-primary" href="#start" data-i18n="cta-start">Kurulum ve Başlangıç</a>
+            <a class="btn btn-primary" href="#downloads" data-i18n="cta-download">Son Sürümü İndir</a>
             <a class="btn btn-secondary" href="#formats" data-i18n="cta-formats">Desteklenen Formatlar</a>
           </div>
           <p class="hero-meta" data-i18n="hero-meta">Linux, Windows ve macOS için yerel masaüstü uygulaması. MIT / Apache-2.0 lisanslı.</p>
         </div>
 
-        <aside class="script-sheet" aria-label="Senaryo önizlemesi">
-          <div class="sheet-chrome">
-            <span data-i18n="sheet-title">ornek_senaryo.dram — Sayfa 1</span>
-            <span data-i18n="sheet-lang">Senaryo Dili: TR</span>
+        <aside class="studio-preview" aria-label="Uygulama önizlemesi">
+          <div class="studio-chrome">
+            <span class="studio-title">draM. — <span data-i18n="sheet-title">ornek_senaryo.dram</span></span>
+            <span class="studio-lang" data-i18n="sheet-lang">Senaryo Dili: TR</span>
           </div>
-          <div class="sheet-body">
-            <div class="sc-heading">
-              <span data-i18n="sc-heading">İÇ. KAFE - GECE</span>
-              <span>1</span>
+          <div class="studio-workspace">
+            <div class="studio-paper">
+              <div class="sc-heading">
+                <span data-i18n="sc-heading">İÇ. KAFE - GECE</span>
+                <span>1</span>
+              </div>
+              <p class="sc-action" data-i18n="sc-action">
+                Yağmur İstanbul sokaklarını yıkar. ÇİĞDEM (30) pencere kenarındaki masada not defterini açar.
+              </p>
+              <div class="sc-character" data-i18n="sc-character">ÇİĞDEM</div>
+              <div class="sc-paren" data-i18n="sc-paren">(alçak sesle)</div>
+              <p class="sc-dialogue" data-i18n="sc-dialogue">
+                Bu gece her şey değişecek. İlk sahneden itibaren.
+              </p>
+              <div class="sc-transition" data-i18n="sc-transition">KESME.</div>
             </div>
-            <p class="sc-action" data-i18n="sc-action">
-              Yağmur İstanbul sokaklarını yıkar. ÇİĞDEM (30) pencere kenarındaki masada not defterini açar.
-            </p>
-            <div class="sc-character" data-i18n="sc-character">ÇİĞDEM</div>
-            <div class="sc-paren" data-i18n="sc-paren">(alçak sesle)</div>
-            <p class="sc-dialogue" data-i18n="sc-dialogue">
-              Bu gece her şey değişecek. İlk sahneden itibaren.
-            </p>
-            <div class="sc-transition" data-i18n="sc-transition">KESME.</div>
+            <div class="studio-dock" aria-hidden="true">
+              <div class="dock-tabs">
+                <span class="dock-tab active" data-i18n="dock-fmt">Biçim</span>
+                <span class="dock-tab" data-i18n="dock-chr">Karakter</span>
+              </div>
+              <div class="dock-item active" data-i18n="dock-item-1">1 Sahne Başlığı</div>
+              <div class="dock-item" data-i18n="dock-item-2">2 Aksiyon</div>
+              <div class="dock-item" data-i18n="dock-item-3">3 Karakter</div>
+              <div class="dock-item" data-i18n="dock-item-4">5 Diyalog</div>
+              <div class="dock-sep"></div>
+              <div class="dock-nav-card">
+                <strong data-i18n="sc-heading">İÇ. KAFE - GECE</strong>
+                <span data-i18n="dock-page">Sayfa 1 / 1</span>
+              </div>
+            </div>
           </div>
         </aside>
+      </div>
+    </section>
+
+    <section class="section" id="downloads">
+      <div class="container">
+        <div class="section-head section-head-row">
+          <div>
+            <h2 data-i18n="dl-title">İndir ve Sürümler</h2>
+            <p data-i18n="dl-sub">Güncel kararlı sürüm paketleri her güncellemede otomatik olarak derlenir ve SHA-256 doğrulamasıyla yayınlanır.</p>
+          </div>
+          <div class="release-badge-box">
+            <span class="release-ver-label" data-i18n="dl-current-label">Güncel Sürüm</span>
+            <strong id="dl-version-text">v0.0.1</strong>
+          </div>
+        </div>
+
+        <div class="download-grid">
+          <article class="card dl-card">
+            <div class="dl-os">Linux</div>
+            <h3 data-i18n="dl-linux-title">Debian / Ubuntu &amp; Taşınabilir</h3>
+            <p data-i18n="dl-linux-desc">x86_64 sistemler için .deb kurulum paketi veya kurulum gerektirmeyen tar.gz arşivi.</p>
+            <div class="dl-actions">
+              <a class="btn btn-primary btn-sm" id="dl-linux-deb" href="https://github.com/MOzcelik14/draM/releases/latest" target="_blank" rel="noopener">.deb (amd64)</a>
+              <a class="btn btn-secondary btn-sm" id="dl-linux-tar" href="https://github.com/MOzcelik14/draM/releases/latest" target="_blank" rel="noopener">.tar.gz</a>
+            </div>
+          </article>
+
+          <article class="card dl-card">
+            <div class="dl-os">Windows</div>
+            <h3 data-i18n="dl-win-title">Windows 10 / 11 (x86_64)</h3>
+            <p data-i18n="dl-win-desc">Doğrudan çalıştırılabilen dram.exe ve dil dosyalarını içeren taşınabilir ZIP paketi.</p>
+            <div class="dl-actions">
+              <a class="btn btn-primary btn-sm" id="dl-win-zip" href="https://github.com/MOzcelik14/draM/releases/latest" target="_blank" rel="noopener">.zip (x86_64)</a>
+            </div>
+          </article>
+
+          <article class="card dl-card">
+            <div class="dl-os">macOS</div>
+            <h3 data-i18n="dl-mac-title">Apple Silicon (arm64)</h3>
+            <p data-i18n="dl-mac-desc">Apple M-serisi işlemcili Mac bilgisayarlar için derlenmiş yerel uygulama arşivi.</p>
+            <div class="dl-actions">
+              <a class="btn btn-primary btn-sm" id="dl-mac-tar" href="https://github.com/MOzcelik14/draM/releases/latest" target="_blank" rel="noopener">.tar.gz (arm64)</a>
+            </div>
+          </article>
+        </div>
+
+        <div class="release-footer-links">
+          <a id="dl-release-page" href="https://github.com/MOzcelik14/draM/releases" target="_blank" rel="noopener" data-i18n="dl-all-releases">Tüm Sürümler ve Sürüm Notları</a>
+          <span class="dot-sep">·</span>
+          <a id="dl-checksums" href="https://github.com/MOzcelik14/draM/releases/latest" target="_blank" rel="noopener">SHA256SUMS.txt</a>
+        </div>
       </div>
     </section>
 
@@ -153,7 +225,7 @@
       <div class="container">
         <div class="section-head">
           <h2 data-i18n="start-title">Kurulum ve Kısayollar</h2>
-          <p data-i18n="start-sub">Sisteminizde güncel Rust araç zinciri bulunduğunda tek komutla derleyip çalıştırabilirsiniz.</p>
+          <p data-i18n="start-sub">Hazır paketleri indirerek veya güncel Rust araç zinciriyle kaynaktan derleyerek hemen kullanabilirsiniz.</p>
         </div>
         <div class="split-grid">
           <article class="card">
@@ -172,7 +244,7 @@
 
   <footer class="site-footer">
     <div class="container footer-inner">
-      <span data-i18n="footer-left">draM. — Senaryo Yazım Uygulaması</span>
+      <span><span data-i18n="footer-left">draM. — Senaryo Yazım Uygulaması</span> (<span id="footer-version">v0.0.1</span>)</span>
       <span data-i18n="footer-right">MIT / Apache-2.0 Lisansı | Courier Prime (SIL OFL 1.1)</span>
     </div>
   </footer>

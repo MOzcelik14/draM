@@ -1,15 +1,20 @@
+const FALLBACK_VERSION = "0.0.1";
+const REPO = "MOzcelik14/draM";
+
 const I18N = {
   tr: {
+    "nav-downloads": "İndir",
     "nav-features": "Özellikler",
     "nav-formats": "Formatlar",
     "nav-start": "Başlangıç",
+    "theme-btn": "Tema",
     "hero-eyebrow": "Masaüstü Senaryo Yazım Uygulaması",
     "hero-title": "Türkçe ve İngilizce senaryolar için sade, hızlı ve güvenilir çalışma alanı.",
     "hero-lead": "draM., senaristler ve yapım ekipleri için tasarlanmış yerel bir masaüstü uygulamasıdır. Yazım akışını bozmadan endüstri standardında biçimlendirme, baskıya hazır PDF üretimi ve yaygın formatlarla tam uyum sunar.",
-    "cta-start": "Kurulum ve Başlangıç",
+    "cta-download": "Son Sürümü İndir",
     "cta-formats": "Desteklenen Formatlar",
     "hero-meta": "Linux, Windows ve macOS için yerel masaüstü uygulaması. MIT / Apache-2.0 lisanslı.",
-    "sheet-title": "ornek_senaryo.dram — Sayfa 1",
+    "sheet-title": "ornek_senaryo.dram",
     "sheet-lang": "Senaryo Dili: TR",
     "sc-heading": "İÇ. KAFE - GECE",
     "sc-action": "Yağmur İstanbul sokaklarını yıkar. ÇİĞDEM (30) pencere kenarındaki masada not defterini açar.",
@@ -17,6 +22,23 @@ const I18N = {
     "sc-paren": "(alçak sesle)",
     "sc-dialogue": "Bu gece her şey değişecek. İlk sahneden itibaren.",
     "sc-transition": "KESME.",
+    "dock-fmt": "Biçim",
+    "dock-chr": "Karakter",
+    "dock-item-1": "1 Sahne Başlığı",
+    "dock-item-2": "2 Aksiyon",
+    "dock-item-3": "3 Karakter",
+    "dock-item-4": "5 Diyalog",
+    "dock-page": "Sayfa 1 / 1",
+    "dl-title": "İndir ve Sürümler",
+    "dl-sub": "Güncel kararlı sürüm paketleri her güncellemede otomatik olarak derlenir ve SHA-256 doğrulamasıyla yayınlanır.",
+    "dl-current-label": "Güncel Sürüm",
+    "dl-linux-title": "Debian / Ubuntu & Taşınabilir",
+    "dl-linux-desc": "x86_64 sistemler için .deb kurulum paketi veya kurulum gerektirmeyen tar.gz arşivi.",
+    "dl-win-title": "Windows 10 / 11 (x86_64)",
+    "dl-win-desc": "Doğrudan çalıştırılabilen dram.exe ve dil dosyalarını içeren taşınabilir ZIP paketi.",
+    "dl-mac-title": "Apple Silicon (arm64)",
+    "dl-mac-desc": "Apple M-serisi işlemcili Mac bilgisayarlar için derlenmiş yerel uygulama arşivi.",
+    "dl-all-releases": "Tüm Sürümler ve Sürüm Notları",
     "feat-title": "Yazım Sürecine Odaklanan Mimari",
     "feat-sub": "Karmaşık menüler ve dikkat dağıtıcı araçlar yerine doğrudan senaryo üretimine hizmet eden temel araçlar.",
     "f1-title": "Akışkan Senaryo Editörü",
@@ -44,7 +66,7 @@ const I18N = {
     "f-fdx-sup": "İçe / Dışa Aktarma",
     "f-fdx-note": "Final Draft XML belge ve temel metin stilleri uyumu.",
     "start-title": "Kurulum ve Kısayollar",
-    "start-sub": "Sisteminizde güncel Rust araç zinciri bulunduğunda tek komutla derleyip çalıştırabilirsiniz.",
+    "start-sub": "Hazır paketleri indirerek veya güncel Rust araç zinciriyle kaynaktan derleyerek hemen kullanabilirsiniz.",
     "card-install-title": "Kaynaktan Çalıştırma",
     "card-install-desc": "Linux, Windows ve macOS üzerinde harici tarayıcı motoru veya çalışma zamanı gerektirmeden doğrudan yerel uygulama olarak çalışır.",
     "card-keys-title": "Temel Klavye Kısayolları",
@@ -53,16 +75,18 @@ const I18N = {
     "footer-right": "MIT / Apache-2.0 Lisansı | Courier Prime (SIL OFL 1.1)"
   },
   en: {
+    "nav-downloads": "Download",
     "nav-features": "Features",
     "nav-formats": "Formats",
     "nav-start": "Get Started",
+    "theme-btn": "Theme",
     "hero-eyebrow": "Desktop Screenwriting Application",
     "hero-title": "A focused, reliable workspace for Turkish and English screenplays.",
     "hero-lead": "draM. is a native desktop application built for screenwriters and production teams. It delivers distraction-free formatting flow, print-ready PDF output, and broad compatibility with industry formats.",
-    "cta-start": "Install & Get Started",
+    "cta-download": "Download Latest",
     "cta-formats": "Supported Formats",
     "hero-meta": "Native desktop app for Linux, Windows, and macOS. Licensed under MIT / Apache-2.0.",
-    "sheet-title": "sample_script.dram — Page 1",
+    "sheet-title": "sample_script.dram",
     "sheet-lang": "Script Language: EN",
     "sc-heading": "INT. CAFE - NIGHT",
     "sc-action": "Rain washes the Istanbul streets. CIGDEM (30) opens her notebook at a quiet corner table.",
@@ -70,6 +94,23 @@ const I18N = {
     "sc-paren": "(under her breath)",
     "sc-dialogue": "Everything changes tonight. Starting from the very first scene.",
     "sc-transition": "CUT TO:",
+    "dock-fmt": "Format",
+    "dock-chr": "Characters",
+    "dock-item-1": "1 Scene Heading",
+    "dock-item-2": "2 Action",
+    "dock-item-3": "3 Character",
+    "dock-item-4": "5 Dialogue",
+    "dock-page": "Page 1 of 1",
+    "dl-title": "Download & Releases",
+    "dl-sub": "Stable release packages are built automatically on every update and published with SHA-256 checksums.",
+    "dl-current-label": "Latest Version",
+    "dl-linux-title": "Debian / Ubuntu & Portable",
+    "dl-linux-desc": "Installable .deb package or standalone tar.gz archive for x86_64 Linux systems.",
+    "dl-win-title": "Windows 10 / 11 (x86_64)",
+    "dl-win-desc": "Portable ZIP archive containing dram.exe and localization files.",
+    "dl-mac-title": "Apple Silicon (arm64)",
+    "dl-mac-desc": "Native application archive compiled for Apple Silicon Mac computers.",
+    "dl-all-releases": "All Releases & Release Notes",
     "feat-title": "Built Around the Writing Flow",
     "feat-sub": "Essential tools that serve screenplay craft without visual clutter or bloated menus.",
     "f1-title": "Fluid Screenplay Editor",
@@ -97,7 +138,7 @@ const I18N = {
     "f-fdx-sup": "Import / Export",
     "f-fdx-note": "Final Draft XML document and inline styling support.",
     "start-title": "Installation & Shortcuts",
-    "start-sub": "Compile and launch natively in one command with an up-to-date Rust toolchain.",
+    "start-sub": "Download a prebuilt package or build natively from source with an up-to-date Rust toolchain.",
     "card-install-title": "Build from Source",
     "card-install-desc": "Runs natively on Linux, Windows, and macOS with no embedded browser runtime required.",
     "card-keys-title": "Core Keyboard Shortcuts",
@@ -106,6 +147,47 @@ const I18N = {
     "footer-right": "MIT / Apache-2.0 License | Courier Prime (SIL OFL 1.1)"
   }
 };
+
+function applyVersion(rawVersion) {
+  const ver = String(rawVersion || FALLBACK_VERSION).replace(/^v/, "");
+  const tag = `v${ver}`;
+  const base = `https://github.com/${REPO}/releases/download/${tag}`;
+
+  const setText = (id, text) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  };
+  const setHref = (id, url) => {
+    const el = document.getElementById(id);
+    if (el) el.setAttribute("href", url);
+  };
+
+  setText("hero-version-pill", tag);
+  setText("dl-version-text", tag);
+  setText("footer-version", tag);
+
+  setHref("dl-linux-deb", `${base}/draM_${ver}_amd64.deb`);
+  setHref("dl-linux-tar", `${base}/draM-${ver}-linux-x86_64.tar.gz`);
+  setHref("dl-win-zip", `${base}/draM-${ver}-windows-x86_64.zip`);
+  setHref("dl-mac-tar", `${base}/draM-${ver}-macos-arm64.tar.gz`);
+  setHref("dl-checksums", `${base}/SHA256SUMS.txt`);
+  setHref("dl-release-page", `https://github.com/${REPO}/releases/tag/${tag}`);
+}
+
+async function syncLatestVersion() {
+  applyVersion(FALLBACK_VERSION);
+  try {
+    const res = await fetch("./version.json", { cache: "no-store" });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.version) {
+        applyVersion(data.version);
+      }
+    }
+  } catch (_) {
+    // Keep fallback version when opened locally
+  }
+}
 
 function setLang(lang) {
   const dict = I18N[lang] || I18N.tr;
@@ -142,4 +224,5 @@ document.addEventListener("DOMContentLoaded", () => {
     themeBtn.addEventListener("click", toggleTheme);
   }
   setLang("tr");
+  syncLatestVersion();
 });
