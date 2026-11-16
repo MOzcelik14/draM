@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use chrono::Utc;
-use dram_core::text::contains_case_insensitive;
+use dram_core::text::{cmp_tr, contains_case_insensitive};
 use dram_core::{
     paginate, Document, DualDialogueGroup, DualSide, EditCommand, ElementType, LayoutProfile, Note,
     PageSize, RevisionMark, ScriptLanguage, TextRun, UndoManager,
@@ -55,6 +55,14 @@ fn main() -> Result<()> {
     .map_err(|err| anyhow::anyhow!("eframe error: {err}"))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InspectorTab {
+    Format,
+    Characters,
+    Locations,
+    Notes,
+}
+
 struct DramApp {
     doc: Document,
     undo: UndoManager,
@@ -65,7 +73,7 @@ struct DramApp {
     status_error: Option<String>,
     show_title_page_editor: bool,
     show_navigator: bool,
-    show_notes_panel: bool,
+    inspector_tab: InspectorTab,
     dark_theme: bool,
     focus_mode: bool,
     show_find_replace: bool,
@@ -97,7 +105,7 @@ impl DramApp {
             status_error: None,
             show_title_page_editor: false,
             show_navigator: true,
-            show_notes_panel: false,
+            inspector_tab: InspectorTab::Format,
             dark_theme: true,
             focus_mode: false,
             show_find_replace: false,
@@ -587,16 +595,74 @@ impl DramApp {
         }
     }
 
-    fn show_scene_navigator(&mut self, ctx: &egui::Context) {
+    fn show_right_dock(&mut self, ctx: &egui::Context) {
         if !self.show_navigator {
             return;
         }
-        egui::SidePanel::left("scene_navigator")
+        let profile = LayoutProfile::for_page_size(self.doc.settings.page_size);
+        let paged = paginate(&self.doc, &profile);
+
+        egui::SidePanel::right("fadein_dock")
             .resizable(true)
-            .default_width(230.0)
+            .default_width(275.0)
+            .min_width(230.0)
             .show(ctx, |ui| {
-                // Collect scene ranges (start_idx, end_idx_exclusive, label)
-                let mut scenes: Vec<(usize, usize, String)> = Vec::new();
+                // Top section: Format | Characters | Locations | Notes tabs
+                ui.horizontal(|ui| {
+                    let tabs = [
+                        (InspectorTab::Format, "tab-format"),
+                        (InspectorTab::Characters, "tab-characters"),
+                        (InspectorTab::Locations, "tab-locations"),
+                        (InspectorTab::Notes, "tab-notes"),
+                    ];
+                    for (tab, key) in tabs {
+                        let active = self.inspector_tab == tab;
+                        if ui.selectable_label(active, self.i18n.t(key)).clicked() {
+                            self.inspector_tab = tab;
+                        }
+                    }
+                });
+                ui.separator();
+
+                let top_h = (ui.available_height() * 0.44).clamp(180.0, 320.0);
+                ui.allocate_ui(egui::vec2(ui.available_width(), top_h), |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("inspector_scroll")
+                        .show(ui, |ui| match self.inspector_tab {
+                            InspectorTab::Format => self.render_format_tab(ui),
+                            InspectorTab::Characters => self.render_characters_tab(ui),
+                            InspectorTab::Locations => self.render_locations_tab(ui),
+                            InspectorTab::Notes => self.render_notes_tab(ui),
+                        });
+                });
+
+                ui.separator();
+
+                // Bottom section: Fade In-style Scene Navigator
+                ui.horizontal(|ui| {
+                    ui.strong(self.i18n.t("nav-heading"));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let mut scene_args = FluentArgs::new();
+                        let count = self
+                            .doc
+                            .elements
+                            .iter()
+                            .filter(|e| e.kind == ElementType::SceneHeading)
+                            .count();
+                        scene_args.set("count", count);
+                        ui.label(
+                            egui::RichText::new(
+                                self.i18n.t_args("status-scenes-count", &scene_args),
+                            )
+                            .small()
+                            .weak(),
+                        );
+                    });
+                });
+                ui.add_space(4.0);
+
+                // Collect scene ranges + first action snippet + page number
+                let mut scenes: Vec<(usize, usize, String, String, usize)> = Vec::new();
                 for (idx, el) in self.doc.elements.iter().enumerate() {
                     if el.kind == ElementType::SceneHeading {
                         if let Some(prev) = scenes.last_mut() {
@@ -613,65 +679,313 @@ impl DramApp {
                         } else {
                             format!("{num}{heading}")
                         };
-                        scenes.push((idx, self.doc.elements.len(), label));
+                        let page_num = element_page_number(&paged, idx);
+                        scenes.push((idx, self.doc.elements.len(), label, String::new(), page_num));
+                    } else if el.kind == ElementType::Action {
+                        if let Some(cur) = scenes.last_mut() {
+                            if cur.3.is_empty() {
+                                cur.3 = el.plain_text();
+                            }
+                        }
                     }
                 }
 
-                ui.horizontal(|ui| {
-                    ui.heading(self.i18n.t("nav-heading"));
-                });
-                let mut scene_args = FluentArgs::new();
-                scene_args.set("count", scenes.len());
-                ui.label(
-                    egui::RichText::new(self.i18n.t_args("status-scenes-count", &scene_args))
-                        .small()
-                        .weak(),
-                );
-                ui.separator();
-
                 let mut move_req: Option<(usize, usize)> = None;
+                let mut active_page = 1usize;
 
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for (s_i, (start, _end, label)) in scenes.iter().enumerate() {
-                        let is_current = self.editor.focused_index >= *start
-                            && scenes
-                                .get(s_i + 1)
-                                .is_none_or(|next| self.editor.focused_index < next.0);
+                let nav_h = (ui.available_height() - 26.0).max(80.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("navigator_scroll")
+                    .max_height(nav_h)
+                    .show(ui, |ui| {
+                        for (s_i, (start, _end, label, snippet, page_num)) in
+                            scenes.iter().enumerate()
+                        {
+                            let is_current = self.editor.focused_index >= *start
+                                && scenes
+                                    .get(s_i + 1)
+                                    .is_none_or(|next| self.editor.focused_index < next.0);
+                            if is_current {
+                                active_page = *page_num;
+                            }
 
-                        ui.horizontal(|ui| {
-                            if ui.selectable_label(is_current, label).clicked() {
+                            let card_fill = if is_current {
+                                theme::ACCENT_CRIMSON_DARK
+                            } else {
+                                ui.visuals().faint_bg_color
+                            };
+
+                            let resp = egui::Frame::new()
+                                .fill(card_fill)
+                                .corner_radius(egui::CornerRadius::same(4))
+                                .inner_margin(egui::Margin::symmetric(8, 6))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.horizontal(|ui| {
+                                        let title_color = if is_current {
+                                            egui::Color32::WHITE
+                                        } else {
+                                            ui.visuals().text_color()
+                                        };
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    egui::RichText::new(label)
+                                                        .strong()
+                                                        .small()
+                                                        .color(title_color),
+                                                )
+                                                .frame(false),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.editor.focused_index = *start;
+                                            self.editor.pending_focus = Some(*start);
+                                        }
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if s_i + 1 < scenes.len()
+                                                    && ui
+                                                        .small_button("v")
+                                                        .on_hover_text(self.i18n.t("nav-move-down"))
+                                                        .clicked()
+                                                {
+                                                    move_req = Some((s_i, s_i + 1));
+                                                }
+                                                if s_i > 0
+                                                    && ui
+                                                        .small_button("^")
+                                                        .on_hover_text(self.i18n.t("nav-move-up"))
+                                                        .clicked()
+                                                {
+                                                    move_req = Some((s_i, s_i - 1));
+                                                }
+                                            },
+                                        );
+                                    });
+
+                                    let mut page_args = FluentArgs::new();
+                                    page_args.set("current", *page_num);
+                                    page_args.set("total", paged.page_count());
+                                    let sub_color = if is_current {
+                                        egui::Color32::from_rgb(235, 215, 215)
+                                    } else {
+                                        ui.visuals().weak_text_color()
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(
+                                            self.i18n.t_args("page-x-of-y", &page_args),
+                                        )
+                                        .small()
+                                        .color(sub_color),
+                                    );
+                                    if !snippet.trim().is_empty() {
+                                        let truncated: String =
+                                            snippet.trim().chars().take(54).collect();
+                                        ui.label(
+                                            egui::RichText::new(truncated).small().color(sub_color),
+                                        );
+                                    }
+                                });
+                            if resp.response.clicked() {
                                 self.editor.focused_index = *start;
                                 self.editor.pending_focus = Some(*start);
                             }
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if s_i + 1 < scenes.len()
-                                        && ui
-                                            .small_button("v")
-                                            .on_hover_text(self.i18n.t("nav-move-down"))
-                                            .clicked()
-                                    {
-                                        move_req = Some((s_i, s_i + 1));
-                                    }
-                                    if s_i > 0
-                                        && ui
-                                            .small_button("^")
-                                            .on_hover_text(self.i18n.t("nav-move-up"))
-                                            .clicked()
-                                    {
-                                        move_req = Some((s_i, s_i - 1));
-                                    }
-                                },
-                            );
-                        });
-                    }
-                });
+                            ui.add_space(4.0);
+                        }
+                    });
+
+                ui.separator();
+                let mut page_args = FluentArgs::new();
+                page_args.set("current", active_page);
+                page_args.set("total", paged.page_count());
+                ui.label(
+                    egui::RichText::new(self.i18n.t_args("page-x-of-y", &page_args))
+                        .small()
+                        .weak(),
+                );
 
                 if let Some((from_s, to_s)) = move_req {
-                    self.swap_scenes(&scenes, from_s, to_s);
+                    let simple_scenes: Vec<(usize, usize, String)> = scenes
+                        .into_iter()
+                        .map(|(s, e, l, _, _)| (s, e, l))
+                        .collect();
+                    self.swap_scenes(&simple_scenes, from_s, to_s);
                 }
             });
+    }
+
+    fn render_format_tab(&mut self, ui: &mut egui::Ui) {
+        let current_kind = self
+            .doc
+            .elements
+            .get(self.editor.focused_index)
+            .map_or(ElementType::Action, |e| e.kind);
+
+        for (idx, &kind) in ELEMENT_TYPES.iter().enumerate() {
+            let label = if idx < 8 {
+                format!("{}  {}", idx + 1, self.i18n.t(element_type_i18n_key(kind)))
+            } else {
+                format!("    {}", self.i18n.t(element_type_i18n_key(kind)))
+            };
+            let is_active = current_kind == kind;
+            let text = if is_active {
+                egui::RichText::new(label)
+                    .color(egui::Color32::WHITE)
+                    .strong()
+            } else {
+                egui::RichText::new(label)
+            };
+            let mut btn = egui::Button::new(text).min_size(egui::vec2(ui.available_width(), 22.0));
+            if is_active {
+                btn = btn.fill(theme::ACCENT_CRIMSON);
+            } else {
+                btn = btn.frame(false);
+            }
+            if ui.add(btn).clicked()
+                && !is_active
+                && self
+                    .undo
+                    .execute(
+                        &mut self.doc,
+                        EditCommand::ChangeElementType {
+                            index: self.editor.focused_index,
+                            old_kind: current_kind,
+                            new_kind: kind,
+                        },
+                    )
+                    .is_ok()
+            {
+                self.dirty = true;
+                self.editor.pending_focus = Some(self.editor.focused_index);
+            }
+        }
+    }
+
+    fn render_characters_tab(&mut self, ui: &mut egui::Ui) {
+        let mut chars: Vec<String> = Vec::new();
+        for el in &self.doc.elements {
+            if el.kind == ElementType::Character {
+                let t = el.plain_text().trim().to_string();
+                if !t.is_empty() && !chars.contains(&t) {
+                    chars.push(t);
+                }
+            }
+        }
+        chars.sort_by(|a, b| cmp_tr(a, b));
+        if chars.is_empty() {
+            ui.label(
+                egui::RichText::new(self.i18n.t("empty-list"))
+                    .weak()
+                    .small(),
+            );
+            return;
+        }
+        for name in chars {
+            if ui.selectable_label(false, &name).clicked() {
+                let idx = self.editor.focused_index;
+                if let Some(el) = self.doc.elements.get(idx) {
+                    let old_runs = el.runs.clone();
+                    if self
+                        .undo
+                        .execute(
+                            &mut self.doc,
+                            EditCommand::UpdateRuns {
+                                index: idx,
+                                old_runs,
+                                new_runs: vec![TextRun::plain(name)],
+                            },
+                        )
+                        .is_ok()
+                    {
+                        self.dirty = true;
+                        self.editor.pending_focus = Some(idx);
+                    }
+                }
+            }
+        }
+    }
+
+    fn render_locations_tab(&mut self, ui: &mut egui::Ui) {
+        let mut locs: Vec<(usize, String)> = Vec::new();
+        for (i, el) in self.doc.elements.iter().enumerate() {
+            if el.kind == ElementType::SceneHeading {
+                let t = el.plain_text().trim().to_string();
+                if !t.is_empty() && !locs.iter().any(|(_, existing)| existing == &t) {
+                    locs.push((i, t));
+                }
+            }
+        }
+        locs.sort_by(|a, b| cmp_tr(&a.1, &b.1));
+        if locs.is_empty() {
+            ui.label(
+                egui::RichText::new(self.i18n.t("empty-list"))
+                    .weak()
+                    .small(),
+            );
+            return;
+        }
+        for (idx, loc) in locs {
+            if ui.selectable_label(false, &loc).clicked() {
+                self.editor.focused_index = idx;
+                self.editor.pending_focus = Some(idx);
+            }
+        }
+    }
+
+    fn render_notes_tab(&mut self, ui: &mut egui::Ui) {
+        if ui.small_button(self.i18n.t("notes-add")).clicked() {
+            self.doc.notes.push(Note {
+                id: Uuid::new_v4(),
+                element_id: self
+                    .doc
+                    .elements
+                    .get(self.editor.focused_index)
+                    .map(|e| e.id),
+                title: String::new(),
+                body: String::new(),
+                created_at: Utc::now(),
+            });
+            self.dirty = true;
+        }
+        ui.add_space(6.0);
+        let mut delete_idx: Option<usize> = None;
+        for (idx, note) in self.doc.notes.iter_mut().enumerate() {
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut note.title)
+                                .hint_text(self.i18n.t("notes-title-placeholder"))
+                                .desired_width(170.0),
+                        )
+                        .changed()
+                    {
+                        self.dirty = true;
+                    }
+                    if ui.small_button(self.i18n.t("notes-delete")).clicked() {
+                        delete_idx = Some(idx);
+                    }
+                });
+                if ui
+                    .add(
+                        egui::TextEdit::multiline(&mut note.body)
+                            .hint_text(self.i18n.t("notes-body-placeholder"))
+                            .desired_rows(2)
+                            .desired_width(220.0),
+                    )
+                    .changed()
+                {
+                    self.dirty = true;
+                }
+            });
+            ui.add_space(4.0);
+        }
+        if let Some(i) = delete_idx {
+            self.doc.notes.remove(i);
+            self.dirty = true;
+        }
     }
 
     fn swap_scenes(&mut self, scenes: &[(usize, usize, String)], from_s: usize, to_s: usize) {
@@ -876,76 +1190,6 @@ impl DramApp {
             }
             self.dirty = true;
         }
-    }
-
-    fn show_notes_sidebar(&mut self, ctx: &egui::Context) {
-        if !self.show_notes_panel {
-            return;
-        }
-        egui::SidePanel::right("notes_panel")
-            .resizable(true)
-            .default_width(250.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.heading(self.i18n.t("notes-heading"));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button(self.i18n.t("notes-add")).clicked() {
-                            self.doc.notes.push(Note {
-                                id: Uuid::new_v4(),
-                                element_id: self
-                                    .doc
-                                    .elements
-                                    .get(self.editor.focused_index)
-                                    .map(|e| e.id),
-                                title: String::new(),
-                                body: String::new(),
-                                created_at: Utc::now(),
-                            });
-                            self.dirty = true;
-                        }
-                    });
-                });
-                ui.separator();
-
-                let mut delete_idx: Option<usize> = None;
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for (idx, note) in self.doc.notes.iter_mut().enumerate() {
-                        ui.group(|ui| {
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .add(
-                                        egui::TextEdit::singleline(&mut note.title)
-                                            .hint_text(self.i18n.t("notes-title-placeholder"))
-                                            .desired_width(160.0),
-                                    )
-                                    .changed()
-                                {
-                                    self.dirty = true;
-                                }
-                                if ui.small_button(self.i18n.t("notes-delete")).clicked() {
-                                    delete_idx = Some(idx);
-                                }
-                            });
-                            if ui
-                                .add(
-                                    egui::TextEdit::multiline(&mut note.body)
-                                        .hint_text(self.i18n.t("notes-body-placeholder"))
-                                        .desired_rows(3)
-                                        .desired_width(220.0),
-                                )
-                                .changed()
-                            {
-                                self.dirty = true;
-                            }
-                        });
-                        ui.add_space(4.0);
-                    }
-                });
-                if let Some(i) = delete_idx {
-                    self.doc.notes.remove(i);
-                    self.dirty = true;
-                }
-            });
     }
 
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
@@ -1274,10 +1518,14 @@ impl eframe::App for DramApp {
                         self.show_navigator = !self.show_navigator;
                     }
                     if ui
-                        .selectable_label(self.show_notes_panel, self.i18n.t("notes-toggle"))
+                        .selectable_label(
+                            self.show_navigator && self.inspector_tab == InspectorTab::Notes,
+                            self.i18n.t("notes-toggle"),
+                        )
                         .clicked()
                     {
-                        self.show_notes_panel = !self.show_notes_panel;
+                        self.show_navigator = true;
+                        self.inspector_tab = InspectorTab::Notes;
                     }
                     if ui
                         .selectable_label(self.focus_mode, self.i18n.t("focus-mode-toggle"))
@@ -1285,6 +1533,22 @@ impl eframe::App for DramApp {
                     {
                         self.focus_mode = !self.focus_mode;
                     }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let doc_name = self
+                            .current_path
+                            .as_ref()
+                            .and_then(|p| p.file_name())
+                            .and_then(|n| n.to_str())
+                            .map(ToString::to_string)
+                            .unwrap_or_else(|| self.i18n.t("untitled-document"));
+                        let tab_label = if self.dirty {
+                            format!("{doc_name} *")
+                        } else {
+                            doc_name
+                        };
+                        ui.label(egui::RichText::new(tab_label).small().weak());
+                    });
                 });
             });
 
@@ -1340,9 +1604,8 @@ impl eframe::App for DramApp {
                 });
             });
 
-            // Sidebars (hidden in focus mode)
-            self.show_scene_navigator(ctx);
-            self.show_notes_sidebar(ctx);
+            // Fade In-style right dock (Format/Characters/Locations/Notes + Navigator)
+            self.show_right_dock(ctx);
         }
 
         // Main screenplay editor canvas
@@ -1365,6 +1628,19 @@ impl eframe::App for DramApp {
         self.show_find_replace_window(ctx);
         self.show_print_window(ctx);
     }
+}
+
+fn element_page_number(paged: &dram_core::PaginatedDocument, element_idx: usize) -> usize {
+    for page in &paged.pages {
+        if page
+            .lines
+            .iter()
+            .any(|l| l.element_index == Some(element_idx))
+        {
+            return page.page_number;
+        }
+    }
+    1
 }
 
 #[cfg(test)]

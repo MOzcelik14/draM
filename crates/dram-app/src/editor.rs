@@ -270,20 +270,27 @@ impl EditorState {
 
                                             let widget_id =
                                                 ui.make_persistent_id(("dram_elem", el_id));
-                                            let mut edit = egui::TextEdit::multiline(&mut text)
+                                            let text_color = if kind == ElementType::Synopsis
+                                                || kind == ElementType::Note
+                                            {
+                                                palette.muted_text
+                                            } else {
+                                                palette.paper_ink
+                                            };
+                                            let edit = egui::TextEdit::multiline(&mut text)
                                                 .id(widget_id)
                                                 .desired_rows(1)
                                                 .desired_width(field_width)
                                                 .frame(false)
                                                 .font(font_id)
                                                 .horizontal_align(align)
-                                                .hint_text(i18n.t(element_type_i18n_key(kind)));
-
-                                            if kind == ElementType::Synopsis
-                                                || kind == ElementType::Note
-                                            {
-                                                edit = edit.text_color(palette.muted_text);
-                                            }
+                                                .text_color(text_color)
+                                                .hint_text(
+                                                    egui::RichText::new(
+                                                        i18n.t(element_type_i18n_key(kind)),
+                                                    )
+                                                    .color(palette.muted_text),
+                                                );
 
                                             let response = ui.add(edit);
 

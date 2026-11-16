@@ -130,3 +130,10 @@ rev-blue = Mavi
 rev-pink = Pembe
 rev-yellow = Sarı
 rev-green = Yeşil
+
+tab-format = Biçim
+tab-characters = Karakterler
+tab-locations = Mekânlar
+tab-notes = Notlar
+page-x-of-y = Sayfa { $current } / { $total }
+empty-list = Henüz kayıt yok.

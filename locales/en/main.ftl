@@ -130,3 +130,10 @@ rev-blue = Blue
 rev-pink = Pink
 rev-yellow = Yellow
 rev-green = Green
+
+tab-format = Format
+tab-characters = Characters
+tab-locations = Locations
+tab-notes = Notes
+page-x-of-y = Page { $current } of { $total }
+empty-list = No entries yet.
