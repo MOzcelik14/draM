@@ -602,41 +602,60 @@ impl DramApp {
         let profile = LayoutProfile::for_page_size(self.doc.settings.page_size);
         let paged = paginate(&self.doc, &profile);
 
+        let dock_frame =
+            egui::Frame::side_top_panel(&ctx.style()).inner_margin(egui::Margin::same(10));
+
         egui::SidePanel::right("fadein_dock")
+            .frame(dock_frame)
             .resizable(true)
-            .default_width(275.0)
-            .min_width(230.0)
+            .default_width(300.0)
+            .min_width(260.0)
             .show(ctx, |ui| {
-                // Top section: Format | Characters | Locations | Notes tabs
-                ui.horizontal(|ui| {
-                    let tabs = [
-                        (InspectorTab::Format, "tab-format"),
-                        (InspectorTab::Characters, "tab-characters"),
-                        (InspectorTab::Locations, "tab-locations"),
-                        (InspectorTab::Notes, "tab-notes"),
-                    ];
-                    for (tab, key) in tabs {
-                        let active = self.inspector_tab == tab;
-                        if ui.selectable_label(active, self.i18n.t(key)).clicked() {
-                            self.inspector_tab = tab;
+                // Top section: equal-width 4-tab bar (Format | Characters | Locations | Notes)
+                let tabs = [
+                    (InspectorTab::Format, "tab-format"),
+                    (InspectorTab::Characters, "tab-characters"),
+                    (InspectorTab::Locations, "tab-locations"),
+                    (InspectorTab::Notes, "tab-notes"),
+                ];
+                ui.columns(4, |cols| {
+                    for (i, (tab, key)) in tabs.iter().enumerate() {
+                        let active = self.inspector_tab == *tab;
+                        let btn = egui::Button::new(egui::RichText::new(self.i18n.t(key)).small())
+                            .min_size(egui::vec2(cols[i].available_width(), 24.0))
+                            .selected(active);
+                        if cols[i].add(btn).clicked() {
+                            self.inspector_tab = *tab;
                         }
                     }
                 });
-                ui.separator();
+                ui.add_space(6.0);
 
-                let top_h = (ui.available_height() * 0.44).clamp(180.0, 320.0);
-                ui.allocate_ui(egui::vec2(ui.available_width(), top_h), |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("inspector_scroll")
-                        .show(ui, |ui| match self.inspector_tab {
-                            InspectorTab::Format => self.render_format_tab(ui),
-                            InspectorTab::Characters => self.render_characters_tab(ui),
-                            InspectorTab::Locations => self.render_locations_tab(ui),
-                            InspectorTab::Notes => self.render_notes_tab(ui),
-                        });
-                });
+                let top_h = (ui.available_height() * 0.42).clamp(210.0, 300.0);
+                egui::Frame::new()
+                    .fill(ui.visuals().extreme_bg_color)
+                    .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                    .corner_radius(egui::CornerRadius::same(4))
+                    .inner_margin(egui::Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.set_min_height(top_h);
+                        egui::ScrollArea::vertical()
+                            .id_salt("inspector_scroll")
+                            .min_scrolled_height(top_h)
+                            .max_height(top_h)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| match self.inspector_tab {
+                                InspectorTab::Format => self.render_format_tab(ui),
+                                InspectorTab::Characters => self.render_characters_tab(ui),
+                                InspectorTab::Locations => self.render_locations_tab(ui),
+                                InspectorTab::Notes => self.render_notes_tab(ui),
+                            });
+                    });
 
+                ui.add_space(8.0);
                 ui.separator();
+                ui.add_space(4.0);
 
                 // Bottom section: Fade In-style Scene Navigator
                 ui.horizontal(|ui| {
@@ -1237,372 +1256,379 @@ impl eframe::App for DramApp {
 
         // Top menu bar & element toolbar (hidden in focus mode)
         if !self.focus_mode {
-            egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-                egui::menu::bar(ui, |ui| {
-                    ui.menu_button(self.i18n.t("menu-file"), |ui| {
-                        if ui.button(self.i18n.t("menu-new")).clicked() {
-                            self.new_document();
-                            ui.close_menu();
-                        }
-                        if ui.button(self.i18n.t("menu-open")).clicked() {
-                            self.open_dram();
-                            ui.close_menu();
-                        }
-                        if ui.button(self.i18n.t("menu-save")).clicked() {
-                            self.save_current();
-                            ui.close_menu();
-                        }
-                        if ui.button(self.i18n.t("menu-save-as")).clicked() {
-                            self.save_as();
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button(self.i18n.t("menu-title-page")).clicked() {
-                            self.show_title_page_editor = true;
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button(self.i18n.t("menu-import-fountain")).clicked() {
-                            self.import_fountain();
-                            ui.close_menu();
-                        }
-                        if ui.button(self.i18n.t("menu-export-fountain")).clicked() {
-                            self.export_fountain();
-                            ui.close_menu();
-                        }
-                        if ui.button(self.i18n.t("menu-export-pdf")).clicked() {
-                            self.export_pdf();
-                            ui.close_menu();
-                        }
-                        if ui.button(self.i18n.t("menu-print")).clicked() {
-                            self.open_print_dialog();
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button(self.i18n.t("menu-import-fadein")).clicked() {
-                            self.import_fadein();
-                            ui.close_menu();
-                        }
-                        if ui.button(self.i18n.t("menu-export-fadein")).clicked() {
-                            self.export_fadein();
-                            ui.close_menu();
-                        }
-                        if ui.button(self.i18n.t("menu-import-fdx")).clicked() {
-                            self.import_fdx();
-                            ui.close_menu();
-                        }
-                        if ui.button(self.i18n.t("menu-export-fdx")).clicked() {
-                            self.export_fdx();
-                            ui.close_menu();
-                        }
-                    });
-
-                    ui.menu_button(self.i18n.t("menu-edit"), |ui| {
-                        let can_undo = self.undo.can_undo();
-                        if ui
-                            .add_enabled(can_undo, egui::Button::new(self.i18n.t("menu-undo")))
-                            .clicked()
-                        {
-                            if self.undo.undo(&mut self.doc).is_ok() {
-                                self.dirty = true;
+            let bar_frame = egui::Frame::side_top_panel(&ctx.style())
+                .inner_margin(egui::Margin::symmetric(12, 6));
+            egui::TopBottomPanel::top("top_panel")
+                .frame(bar_frame)
+                .show(ctx, |ui| {
+                    egui::menu::bar(ui, |ui| {
+                        ui.menu_button(self.i18n.t("menu-file"), |ui| {
+                            if ui.button(self.i18n.t("menu-new")).clicked() {
+                                self.new_document();
+                                ui.close_menu();
                             }
-                            ui.close_menu();
-                        }
-                        let can_redo = self.undo.can_redo();
-                        if ui
-                            .add_enabled(can_redo, egui::Button::new(self.i18n.t("menu-redo")))
-                            .clicked()
-                        {
-                            if self.undo.redo(&mut self.doc).is_ok() {
-                                self.dirty = true;
+                            if ui.button(self.i18n.t("menu-open")).clicked() {
+                                self.open_dram();
+                                ui.close_menu();
                             }
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button(self.i18n.t("menu-find-replace")).clicked() {
-                            self.show_find_replace = true;
-                            ui.close_menu();
-                        }
-                    });
-
-                    ui.menu_button(self.i18n.t("menu-settings"), |ui| {
-                        ui.label(self.i18n.t("ui-language-label"));
-                        if ui
-                            .selectable_label(
-                                self.i18n.active() == UiLanguage::Tr,
-                                self.i18n.t("ui-language-tr"),
-                            )
-                            .clicked()
-                        {
-                            self.i18n.set_language(UiLanguage::Tr);
-                        }
-                        if ui
-                            .selectable_label(
-                                self.i18n.active() == UiLanguage::En,
-                                self.i18n.t("ui-language-en"),
-                            )
-                            .clicked()
-                        {
-                            self.i18n.set_language(UiLanguage::En);
-                        }
-
-                        ui.separator();
-                        ui.label(self.i18n.t("script-language-label"));
-                        if ui
-                            .selectable_label(
-                                self.doc.settings.script_language == ScriptLanguage::Tr,
-                                self.i18n.t("script-language-tr"),
-                            )
-                            .clicked()
-                        {
-                            self.doc.settings.set_script_language(ScriptLanguage::Tr);
-                            self.dirty = true;
-                        }
-                        if ui
-                            .selectable_label(
-                                self.doc.settings.script_language == ScriptLanguage::En,
-                                self.i18n.t("script-language-en"),
-                            )
-                            .clicked()
-                        {
-                            self.doc.settings.set_script_language(ScriptLanguage::En);
-                            self.dirty = true;
-                        }
-
-                        ui.separator();
-                        ui.label(self.i18n.t("page-size-label"));
-                        if ui
-                            .selectable_label(
-                                self.doc.settings.page_size == PageSize::A4,
-                                self.i18n.t("page-size-a4"),
-                            )
-                            .clicked()
-                        {
-                            self.doc.settings.page_size = PageSize::A4;
-                            self.dirty = true;
-                        }
-                        if ui
-                            .selectable_label(
-                                self.doc.settings.page_size == PageSize::UsLetter,
-                                self.i18n.t("page-size-us-letter"),
-                            )
-                            .clicked()
-                        {
-                            self.doc.settings.page_size = PageSize::UsLetter;
-                            self.dirty = true;
-                        }
-
-                        ui.separator();
-                        if ui
-                            .checkbox(
-                                &mut self.doc.settings.show_scene_numbers,
-                                self.i18n.t("show-scene-numbers"),
-                            )
-                            .changed()
-                        {
-                            if self.doc.settings.show_scene_numbers {
-                                self.doc.renumber_scenes();
+                            if ui.button(self.i18n.t("menu-save")).clicked() {
+                                self.save_current();
+                                ui.close_menu();
                             }
-                            self.dirty = true;
-                        }
-
-                        ui.separator();
-                        ui.label(self.i18n.t("theme-label"));
-                        if ui
-                            .selectable_label(self.dark_theme, self.i18n.t("theme-dark"))
-                            .clicked()
-                        {
-                            self.dark_theme = true;
-                        }
-                        if ui
-                            .selectable_label(!self.dark_theme, self.i18n.t("theme-light"))
-                            .clicked()
-                        {
-                            self.dark_theme = false;
-                        }
-                        ui.separator();
-                        if ui
-                            .checkbox(&mut self.focus_mode, self.i18n.t("focus-mode-toggle"))
-                            .changed()
-                        {
-                            ui.close_menu();
-                        }
-                    });
-                });
-
-                ui.separator();
-
-                // Element type selector toolbar
-                ui.horizontal(|ui| {
-                    ui.label(self.i18n.t("toolbar-element-type"));
-                    let current_kind = self
-                        .doc
-                        .elements
-                        .get(self.editor.focused_index)
-                        .map_or(ElementType::Action, |e| e.kind);
-
-                    egui::ComboBox::from_id_salt("element_type_combo")
-                        .selected_text(self.i18n.t(element_type_i18n_key(current_kind)))
-                        .show_ui(ui, |ui| {
-                            for &kind in &ELEMENT_TYPES {
-                                let label = self.i18n.t(element_type_i18n_key(kind));
-                                if ui.selectable_label(current_kind == kind, label).clicked()
-                                    && current_kind != kind
-                                    && self
-                                        .undo
-                                        .execute(
-                                            &mut self.doc,
-                                            EditCommand::ChangeElementType {
-                                                index: self.editor.focused_index,
-                                                old_kind: current_kind,
-                                                new_kind: kind,
-                                            },
-                                        )
-                                        .is_ok()
-                                {
-                                    self.dirty = true;
-                                }
+                            if ui.button(self.i18n.t("menu-save-as")).clicked() {
+                                self.save_as();
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            if ui.button(self.i18n.t("menu-title-page")).clicked() {
+                                self.show_title_page_editor = true;
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            if ui.button(self.i18n.t("menu-import-fountain")).clicked() {
+                                self.import_fountain();
+                                ui.close_menu();
+                            }
+                            if ui.button(self.i18n.t("menu-export-fountain")).clicked() {
+                                self.export_fountain();
+                                ui.close_menu();
+                            }
+                            if ui.button(self.i18n.t("menu-export-pdf")).clicked() {
+                                self.export_pdf();
+                                ui.close_menu();
+                            }
+                            if ui.button(self.i18n.t("menu-print")).clicked() {
+                                self.open_print_dialog();
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            if ui.button(self.i18n.t("menu-import-fadein")).clicked() {
+                                self.import_fadein();
+                                ui.close_menu();
+                            }
+                            if ui.button(self.i18n.t("menu-export-fadein")).clicked() {
+                                self.export_fadein();
+                                ui.close_menu();
+                            }
+                            if ui.button(self.i18n.t("menu-import-fdx")).clicked() {
+                                self.import_fdx();
+                                ui.close_menu();
+                            }
+                            if ui.button(self.i18n.t("menu-export-fdx")).clicked() {
+                                self.export_fdx();
+                                ui.close_menu();
                             }
                         });
 
-                    ui.separator();
-                    if ui.button(self.i18n.t("dual-dialogue-btn")).clicked() {
-                        self.toggle_dual_dialogue();
-                    }
+                        ui.menu_button(self.i18n.t("menu-edit"), |ui| {
+                            let can_undo = self.undo.can_undo();
+                            if ui
+                                .add_enabled(can_undo, egui::Button::new(self.i18n.t("menu-undo")))
+                                .clicked()
+                            {
+                                if self.undo.undo(&mut self.doc).is_ok() {
+                                    self.dirty = true;
+                                }
+                                ui.close_menu();
+                            }
+                            let can_redo = self.undo.can_redo();
+                            if ui
+                                .add_enabled(can_redo, egui::Button::new(self.i18n.t("menu-redo")))
+                                .clicked()
+                            {
+                                if self.undo.redo(&mut self.doc).is_ok() {
+                                    self.dirty = true;
+                                }
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            if ui.button(self.i18n.t("menu-find-replace")).clicked() {
+                                self.show_find_replace = true;
+                                ui.close_menu();
+                            }
+                        });
+
+                        ui.menu_button(self.i18n.t("menu-settings"), |ui| {
+                            ui.label(self.i18n.t("ui-language-label"));
+                            if ui
+                                .selectable_label(
+                                    self.i18n.active() == UiLanguage::Tr,
+                                    self.i18n.t("ui-language-tr"),
+                                )
+                                .clicked()
+                            {
+                                self.i18n.set_language(UiLanguage::Tr);
+                            }
+                            if ui
+                                .selectable_label(
+                                    self.i18n.active() == UiLanguage::En,
+                                    self.i18n.t("ui-language-en"),
+                                )
+                                .clicked()
+                            {
+                                self.i18n.set_language(UiLanguage::En);
+                            }
+
+                            ui.separator();
+                            ui.label(self.i18n.t("script-language-label"));
+                            if ui
+                                .selectable_label(
+                                    self.doc.settings.script_language == ScriptLanguage::Tr,
+                                    self.i18n.t("script-language-tr"),
+                                )
+                                .clicked()
+                            {
+                                self.doc.settings.set_script_language(ScriptLanguage::Tr);
+                                self.dirty = true;
+                            }
+                            if ui
+                                .selectable_label(
+                                    self.doc.settings.script_language == ScriptLanguage::En,
+                                    self.i18n.t("script-language-en"),
+                                )
+                                .clicked()
+                            {
+                                self.doc.settings.set_script_language(ScriptLanguage::En);
+                                self.dirty = true;
+                            }
+
+                            ui.separator();
+                            ui.label(self.i18n.t("page-size-label"));
+                            if ui
+                                .selectable_label(
+                                    self.doc.settings.page_size == PageSize::A4,
+                                    self.i18n.t("page-size-a4"),
+                                )
+                                .clicked()
+                            {
+                                self.doc.settings.page_size = PageSize::A4;
+                                self.dirty = true;
+                            }
+                            if ui
+                                .selectable_label(
+                                    self.doc.settings.page_size == PageSize::UsLetter,
+                                    self.i18n.t("page-size-us-letter"),
+                                )
+                                .clicked()
+                            {
+                                self.doc.settings.page_size = PageSize::UsLetter;
+                                self.dirty = true;
+                            }
+
+                            ui.separator();
+                            if ui
+                                .checkbox(
+                                    &mut self.doc.settings.show_scene_numbers,
+                                    self.i18n.t("show-scene-numbers"),
+                                )
+                                .changed()
+                            {
+                                if self.doc.settings.show_scene_numbers {
+                                    self.doc.renumber_scenes();
+                                }
+                                self.dirty = true;
+                            }
+
+                            ui.separator();
+                            ui.label(self.i18n.t("theme-label"));
+                            if ui
+                                .selectable_label(self.dark_theme, self.i18n.t("theme-dark"))
+                                .clicked()
+                            {
+                                self.dark_theme = true;
+                            }
+                            if ui
+                                .selectable_label(!self.dark_theme, self.i18n.t("theme-light"))
+                                .clicked()
+                            {
+                                self.dark_theme = false;
+                            }
+                            ui.separator();
+                            if ui
+                                .checkbox(&mut self.focus_mode, self.i18n.t("focus-mode-toggle"))
+                                .changed()
+                            {
+                                ui.close_menu();
+                            }
+                        });
+                    });
 
                     ui.separator();
-                    ui.label(self.i18n.t("revision-label"));
-                    let cur_rev = self
-                        .doc
-                        .elements
-                        .get(self.editor.focused_index)
-                        .and_then(|e| e.revision.as_ref().map(|r| r.color.clone()));
-                    let rev_label = match cur_rev.as_deref() {
-                        Some("blue") => self.i18n.t("rev-blue"),
-                        Some("pink") => self.i18n.t("rev-pink"),
-                        Some("yellow") => self.i18n.t("rev-yellow"),
-                        Some("green") => self.i18n.t("rev-green"),
-                        _ => self.i18n.t("rev-none"),
-                    };
-                    egui::ComboBox::from_id_salt("revision_combo")
-                        .selected_text(rev_label)
-                        .show_ui(ui, |ui| {
-                            let options = [
-                                (None, "rev-none"),
-                                (Some("blue"), "rev-blue"),
-                                (Some("pink"), "rev-pink"),
-                                (Some("yellow"), "rev-yellow"),
-                                (Some("green"), "rev-green"),
-                            ];
-                            for (val, key) in options {
-                                let is_sel = cur_rev.as_deref() == val;
-                                if ui.selectable_label(is_sel, self.i18n.t(key)).clicked() {
-                                    if let Some(el) =
-                                        self.doc.elements.get_mut(self.editor.focused_index)
+
+                    // Element type selector toolbar
+                    ui.horizontal(|ui| {
+                        ui.label(self.i18n.t("toolbar-element-type"));
+                        let current_kind = self
+                            .doc
+                            .elements
+                            .get(self.editor.focused_index)
+                            .map_or(ElementType::Action, |e| e.kind);
+
+                        egui::ComboBox::from_id_salt("element_type_combo")
+                            .selected_text(self.i18n.t(element_type_i18n_key(current_kind)))
+                            .show_ui(ui, |ui| {
+                                for &kind in &ELEMENT_TYPES {
+                                    let label = self.i18n.t(element_type_i18n_key(kind));
+                                    if ui.selectable_label(current_kind == kind, label).clicked()
+                                        && current_kind != kind
+                                        && self
+                                            .undo
+                                            .execute(
+                                                &mut self.doc,
+                                                EditCommand::ChangeElementType {
+                                                    index: self.editor.focused_index,
+                                                    old_kind: current_kind,
+                                                    new_kind: kind,
+                                                },
+                                            )
+                                            .is_ok()
                                     {
-                                        el.revision = val.map(|c| RevisionMark {
-                                            color: c.to_string(),
-                                            label: String::new(),
-                                        });
                                         self.dirty = true;
                                     }
                                 }
-                            }
-                        });
+                            });
 
-                    ui.separator();
-                    if ui
-                        .selectable_label(self.show_navigator, self.i18n.t("nav-toggle"))
-                        .clicked()
-                    {
-                        self.show_navigator = !self.show_navigator;
-                    }
-                    if ui
-                        .selectable_label(
+                        ui.separator();
+                        if ui.button(self.i18n.t("dual-dialogue-btn")).clicked() {
+                            self.toggle_dual_dialogue();
+                        }
+
+                        ui.separator();
+                        ui.label(self.i18n.t("revision-label"));
+                        let cur_rev = self
+                            .doc
+                            .elements
+                            .get(self.editor.focused_index)
+                            .and_then(|e| e.revision.as_ref().map(|r| r.color.clone()));
+                        let rev_label = match cur_rev.as_deref() {
+                            Some("blue") => self.i18n.t("rev-blue"),
+                            Some("pink") => self.i18n.t("rev-pink"),
+                            Some("yellow") => self.i18n.t("rev-yellow"),
+                            Some("green") => self.i18n.t("rev-green"),
+                            _ => self.i18n.t("rev-none"),
+                        };
+                        egui::ComboBox::from_id_salt("revision_combo")
+                            .selected_text(rev_label)
+                            .show_ui(ui, |ui| {
+                                let options = [
+                                    (None, "rev-none"),
+                                    (Some("blue"), "rev-blue"),
+                                    (Some("pink"), "rev-pink"),
+                                    (Some("yellow"), "rev-yellow"),
+                                    (Some("green"), "rev-green"),
+                                ];
+                                for (val, key) in options {
+                                    let is_sel = cur_rev.as_deref() == val;
+                                    if ui.selectable_label(is_sel, self.i18n.t(key)).clicked() {
+                                        if let Some(el) =
+                                            self.doc.elements.get_mut(self.editor.focused_index)
+                                        {
+                                            el.revision = val.map(|c| RevisionMark {
+                                                color: c.to_string(),
+                                                label: String::new(),
+                                            });
+                                            self.dirty = true;
+                                        }
+                                    }
+                                }
+                            });
+
+                        ui.separator();
+                        let toggle_btn = |ui: &mut egui::Ui, active: bool, label: String| -> bool {
+                            let mut btn = egui::Button::new(label);
+                            if active {
+                                btn = btn.fill(ui.visuals().widgets.hovered.bg_fill);
+                            }
+                            ui.add(btn).clicked()
+                        };
+                        if toggle_btn(ui, self.show_navigator, self.i18n.t("nav-toggle")) {
+                            self.show_navigator = !self.show_navigator;
+                        }
+                        if toggle_btn(
+                            ui,
                             self.show_navigator && self.inspector_tab == InspectorTab::Notes,
                             self.i18n.t("notes-toggle"),
-                        )
-                        .clicked()
-                    {
-                        self.show_navigator = true;
-                        self.inspector_tab = InspectorTab::Notes;
-                    }
-                    if ui
-                        .selectable_label(self.focus_mode, self.i18n.t("focus-mode-toggle"))
-                        .clicked()
-                    {
-                        self.focus_mode = !self.focus_mode;
-                    }
+                        ) {
+                            self.show_navigator = true;
+                            self.inspector_tab = InspectorTab::Notes;
+                        }
+                        if toggle_btn(ui, self.focus_mode, self.i18n.t("focus-mode-toggle")) {
+                            self.focus_mode = !self.focus_mode;
+                        }
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let doc_name = self
-                            .current_path
-                            .as_ref()
-                            .and_then(|p| p.file_name())
-                            .and_then(|n| n.to_str())
-                            .map(ToString::to_string)
-                            .unwrap_or_else(|| self.i18n.t("untitled-document"));
-                        let tab_label = if self.dirty {
-                            format!("{doc_name} *")
-                        } else {
-                            doc_name
-                        };
-                        ui.label(egui::RichText::new(tab_label).small().weak());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let doc_name = self
+                                .current_path
+                                .as_ref()
+                                .and_then(|p| p.file_name())
+                                .and_then(|n| n.to_str())
+                                .map(ToString::to_string)
+                                .unwrap_or_else(|| self.i18n.t("untitled-document"));
+                            let tab_label = if self.dirty {
+                                format!("{doc_name} *")
+                            } else {
+                                doc_name
+                            };
+                            ui.label(egui::RichText::new(tab_label).small().weak());
+                        });
                     });
                 });
-            });
 
             // Bottom status bar
-            egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    let scene_count = self
-                        .doc
-                        .elements
-                        .iter()
-                        .filter(|e| e.kind == ElementType::SceneHeading)
-                        .count();
-                    let mut scene_args = FluentArgs::new();
-                    scene_args.set("count", scene_count);
-                    ui.label(self.i18n.t_args("status-scenes-count", &scene_args));
+            let status_frame = egui::Frame::side_top_panel(&ctx.style())
+                .inner_margin(egui::Margin::symmetric(12, 5));
+            egui::TopBottomPanel::bottom("status_bar")
+                .frame(status_frame)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        let scene_count = self
+                            .doc
+                            .elements
+                            .iter()
+                            .filter(|e| e.kind == ElementType::SceneHeading)
+                            .count();
+                        let mut scene_args = FluentArgs::new();
+                        scene_args.set("count", scene_count);
+                        ui.label(self.i18n.t_args("status-scenes-count", &scene_args));
 
-                    ui.separator();
-
-                    let mut line_args = FluentArgs::new();
-                    line_args.set("count", self.doc.elements.len());
-                    ui.label(self.i18n.t_args("status-elements-count", &line_args));
-
-                    ui.separator();
-
-                    let profile = LayoutProfile::for_page_size(self.doc.settings.page_size);
-                    let paged = paginate(&self.doc, &profile);
-                    let mut page_args = FluentArgs::new();
-                    page_args.set("pages", paged.page_count());
-                    page_args.set("minutes", paged.estimated_minutes());
-                    ui.label(self.i18n.t_args("status-pages-runtime", &page_args));
-
-                    ui.separator();
-
-                    let status_key = if self.dirty {
-                        "status-modified"
-                    } else {
-                        "status-saved"
-                    };
-                    ui.label(self.i18n.t(status_key));
-
-                    if let Some(err) = &self.status_error {
                         ui.separator();
-                        ui.colored_label(egui::Color32::LIGHT_RED, err);
-                    }
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            egui::RichText::new(self.i18n.t("status-hint-flow"))
-                                .weak()
-                                .small(),
-                        );
+                        let mut line_args = FluentArgs::new();
+                        line_args.set("count", self.doc.elements.len());
+                        ui.label(self.i18n.t_args("status-elements-count", &line_args));
+
+                        ui.separator();
+
+                        let profile = LayoutProfile::for_page_size(self.doc.settings.page_size);
+                        let paged = paginate(&self.doc, &profile);
+                        let mut page_args = FluentArgs::new();
+                        page_args.set("pages", paged.page_count());
+                        page_args.set("minutes", paged.estimated_minutes());
+                        ui.label(self.i18n.t_args("status-pages-runtime", &page_args));
+
+                        ui.separator();
+
+                        let status_key = if self.dirty {
+                            "status-modified"
+                        } else {
+                            "status-saved"
+                        };
+                        ui.label(self.i18n.t(status_key));
+
+                        if let Some(err) = &self.status_error {
+                            ui.separator();
+                            ui.colored_label(egui::Color32::LIGHT_RED, err);
+                        }
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(self.i18n.t("status-hint-flow"))
+                                    .weak()
+                                    .small(),
+                            );
+                        });
                     });
                 });
-            });
 
             // Fade In-style right dock (Format/Characters/Locations/Notes + Navigator)
             self.show_right_dock(ctx);
