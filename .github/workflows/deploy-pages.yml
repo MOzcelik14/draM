@@ -1,0 +1,60 @@
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "Cargo.toml"
+      - ".github/workflows/deploy-pages.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sync version from Cargo.toml
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, re
+
+          cargo = pathlib.Path("Cargo.toml").read_text(encoding="utf-8")
+          m = re.search(r'(?m)^version\s*=\s*"([^"]+)"', cargo)
+          if not m:
+              raise SystemExit("Could not find version in Cargo.toml")
+          ver = m.group(1)
+          print(f"Syncing GitHub Pages version to v{ver}")
+
+          pathlib.Path("docs/version.json").write_text(
+              json.dumps({"version": ver}, indent=2) + "\n", encoding="utf-8"
+          )
+          PY
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: "docs"
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
