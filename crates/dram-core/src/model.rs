@@ -502,6 +502,9 @@ pub struct Note {
     pub title: String,
     /// Note body.
     pub body: String,
+    /// Optional path of an embedded reference image inside the `.dram` archive (e.g. `assets/<uuid>.png`).
+    #[serde(default)]
+    pub asset_path: Option<String>,
     /// Creation timestamp.
     pub created_at: DateTime<Utc>,
 }
@@ -521,6 +524,9 @@ pub struct Document {
     pub notes: Vec<Note>,
     /// Per-document settings.
     pub settings: DocumentSettings,
+    /// Embedded binary assets (e.g. reference images) keyed by archive path (`assets/<name>`).
+    #[serde(skip)]
+    pub assets: std::collections::BTreeMap<String, Vec<u8>>,
 }
 
 impl Default for Document {
@@ -542,6 +548,7 @@ impl Document {
             elements: vec![Element::new(ElementType::SceneHeading, "")],
             notes: Vec::new(),
             settings,
+            assets: std::collections::BTreeMap::new(),
         }
     }
 

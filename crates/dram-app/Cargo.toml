@@ -21,6 +21,7 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 eframe = { workspace = true }
 fluent-bundle = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 rfd = { workspace = true }
 sys-locale = { workspace = true }
 unic-langid = { workspace = true }

@@ -5,7 +5,9 @@
 pub mod error;
 pub mod model;
 pub mod pagination;
+pub mod reports;
 pub mod spell;
+pub mod templates;
 pub mod text;
 pub mod undo;
 
@@ -18,5 +20,9 @@ pub use model::{
 pub use pagination::{
     paginate, LayoutProfile, LineAlign, PaginatedDocument, PaginatedLine, PaginatedPage,
 };
-pub use spell::{NoopSpellChecker, SpellChecker};
+pub use reports::{
+    breakdown_to_csv, generate_breakdown, CharacterReport, LocationReport, ScriptBreakdown,
+};
+pub use spell::{BuiltinSpellChecker, NoopSpellChecker, SpellChecker};
+pub use templates::{document_from_template, ProjectTemplate};
 pub use undo::{EditCommand, UndoManager};

@@ -83,13 +83,15 @@ pub fn save_dram(path: &Path, doc: &Document) -> Result<(), FormatError> {
 pub fn write_dram_to_writer<W: Write + Seek>(writer: W, doc: &Document) -> Result<(), FormatError> {
     let mut zip = ZipWriter::new(writer);
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    let stored_options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
 
+    let embedded_assets: Vec<String> = doc.assets.keys().cloned().collect();
     let manifest = DramManifest {
         format_version: CURRENT_FORMAT_VERSION,
         document_id: doc.id,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         saved_at: Utc::now(),
-        embedded_assets: Vec::new(),
+        embedded_assets,
     };
     let script = ScriptPayload {
         metadata: doc.metadata.clone(),
@@ -104,6 +106,13 @@ pub fn write_dram_to_writer<W: Write + Seek>(writer: W, doc: &Document) -> Resul
     write_json_entry(&mut zip, ENTRY_SCRIPT, &script, options)?;
     write_json_entry(&mut zip, ENTRY_NOTES, &notes, options)?;
     write_json_entry(&mut zip, ENTRY_SETTINGS, &doc.settings, options)?;
+
+    for (asset_path, bytes) in &doc.assets {
+        if asset_path.starts_with("assets/") && !asset_path.contains("..") {
+            zip.start_file(asset_path, stored_options)?;
+            zip.write_all(bytes)?;
+        }
+    }
 
     zip.finish()?;
     Ok(())
@@ -171,6 +180,20 @@ pub fn read_dram_from_reader<R: Read + Seek>(reader: R) -> Result<Document, Form
             source,
         })?;
 
+    const MAX_ASSET_BYTES: u64 = 10 * 1024 * 1024;
+    let mut assets = std::collections::BTreeMap::new();
+    for asset_path in &manifest.embedded_assets {
+        if !asset_path.starts_with("assets/") || asset_path.contains("..") {
+            continue;
+        }
+        if let Ok(entry) = archive.by_name(asset_path) {
+            let mut buf = Vec::new();
+            if entry.take(MAX_ASSET_BYTES).read_to_end(&mut buf).is_ok() && !buf.is_empty() {
+                assets.insert(asset_path.clone(), buf);
+            }
+        }
+    }
+
     Ok(Document {
         id: manifest.document_id,
         metadata: script.metadata,
@@ -178,6 +201,7 @@ pub fn read_dram_from_reader<R: Read + Seek>(reader: R) -> Result<Document, Form
         elements: script.elements,
         notes: notes.notes,
         settings,
+        assets,
     })
 }
 
@@ -308,5 +332,31 @@ mod tests {
             err,
             FormatError::UnsupportedVersion { found: 999, .. }
         ));
+    }
+
+    #[test]
+    fn dram_round_trip_preserves_embedded_assets() {
+        let mut doc = Document::new(ScriptLanguage::Tr);
+        let asset_key = "assets/ref_location.png".to_string();
+        let fake_png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4];
+        doc.assets.insert(asset_key.clone(), fake_png.clone());
+        doc.notes.push(Note {
+            id: Uuid::new_v4(),
+            element_id: None,
+            title: "Mekan Referansı".to_string(),
+            body: "Gece ışıklandırması".to_string(),
+            asset_path: Some(asset_key.clone()),
+            created_at: Utc::now(),
+        });
+
+        let mut buf = Cursor::new(Vec::new());
+        write_dram_to_writer(&mut buf, &doc).expect("write");
+        buf.set_position(0);
+        let loaded = read_dram_from_reader(buf).expect("read");
+        assert_eq!(loaded.assets.get(&asset_key), Some(&fake_png));
+        assert_eq!(
+            loaded.notes[0].asset_path.as_deref(),
+            Some(asset_key.as_str())
+        );
     }
 }

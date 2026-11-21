@@ -177,3 +177,50 @@ btn-discard-recovery = Yoksay
 fmt-bold = Kalın (Ctrl+B)
 fmt-italic = İtalik (Ctrl+I)
 fmt-underline = Altı Çizili (Ctrl+U)
+
+view-editor = Editör
+view-beat-board = İndeks Kartları
+beat-board-title = İndeks Kartları
+beat-board-empty = Henüz sahne başlığı yok. Editörde bir sahne başlığı ekleyerek başlayın.
+beat-board-open = Editörde Aç
+beat-board-synopsis-placeholder = Sahne özeti ekle...
+beat-board-move-prev = Önceye Taşı
+beat-board-move-next = Sonraya Taşı
+
+rev-mode-toggle = Revizyon Modu
+rev-mode-active = Revizyon: Açık
+rev-clear-all = Revizyonları Temizle
+
+menu-reports = Senaryo Raporları...
+reports-title = Senaryo Raporları
+reports-summary = Toplam { $scenes } sahne · İÇ.: { $int } · DIŞ.: { $ext } · GÜN: { $day } · GECE: { $night }
+reports-tab-characters = Karakterler
+reports-tab-locations = Mekanlar
+reports-col-name = Karakter
+reports-col-lines = Replik
+reports-col-words = Kelime
+reports-col-scenes = Sahne
+reports-col-location = Mekan
+reports-col-int-ext = İÇ./DIŞ.
+reports-col-day-night = GÜN/GECE
+reports-export-csv = CSV Dışa Aktar...
+reports-exported = Rapor CSV olarak kaydedildi.
+
+menu-new-template = Şablondan Yeni
+template-feature = Uzun Metraj Film
+template-short = Kısa Film
+template-series = Dizi Bölümü
+
+menu-recent-files = Son Kullanılanlar
+menu-recent-empty = (Henüz dosya yok)
+menu-recent-clear = Listeyi Temizle
+
+tp-preview-heading = Canlı Önizleme
+
+spellcheck-toggle = Yazım Denetimi
+spell-add-dict = Sözlüğe Ekle
+spell-no-suggestions = (Öneri yok)
+
+notes-attach-image = Görsel Ekle...
+notes-remove-image = Görseli Kaldır
+notes-preview-title = Referans Görseli

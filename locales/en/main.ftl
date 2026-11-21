@@ -177,3 +177,50 @@ btn-discard-recovery = Discard
 fmt-bold = Bold (Ctrl+B)
 fmt-italic = Italic (Ctrl+I)
 fmt-underline = Underline (Ctrl+U)
+
+view-editor = Editor
+view-beat-board = Index Cards
+beat-board-title = Index Cards
+beat-board-empty = No scene headings yet. Add a scene heading in the editor to get started.
+beat-board-open = Open in Editor
+beat-board-synopsis-placeholder = Add scene synopsis...
+beat-board-move-prev = Move Earlier
+beat-board-move-next = Move Later
+
+rev-mode-toggle = Revision Mode
+rev-mode-active = Revision: On
+rev-clear-all = Clear Revisions
+
+menu-reports = Script Reports...
+reports-title = Script Reports
+reports-summary = Total { $scenes } scenes · INT.: { $int } · EXT.: { $ext } · DAY: { $day } · NIGHT: { $night }
+reports-tab-characters = Characters
+reports-tab-locations = Locations
+reports-col-name = Character
+reports-col-lines = Blocks
+reports-col-words = Words
+reports-col-scenes = Scenes
+reports-col-location = Location
+reports-col-int-ext = INT./EXT.
+reports-col-day-night = DAY/NIGHT
+reports-export-csv = Export CSV...
+reports-exported = Report exported to CSV.
+
+menu-new-template = New from Template
+template-feature = Feature Film
+template-short = Short Film
+template-series = TV Episode
+
+menu-recent-files = Recent Files
+menu-recent-empty = (No recent files)
+menu-recent-clear = Clear List
+
+tp-preview-heading = Live Preview
+
+spellcheck-toggle = Spellcheck
+spell-add-dict = Add to Dictionary
+spell-no-suggestions = (No suggestions)
+
+notes-attach-image = Attach Image...
+notes-remove-image = Remove Image
+notes-preview-title = Reference Image

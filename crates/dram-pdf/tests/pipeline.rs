@@ -57,17 +57,20 @@ KESME:
     let profile = LayoutProfile::for_page_size(PageSize::A4);
     let paged = paginate(&reloaded, &profile);
     assert!(paged.page_count() >= 1);
-    let ayse_exists = paged
+    let ayse = paged
         .pages
         .iter()
         .flat_map(|p| p.lines.iter())
-        .any(|line| line.runs.iter().any(|r| r.text.contains("AYŞE")));
-    let mehmet_exists = paged
+        .find(|line| line.runs.iter().any(|r| r.text.contains("AYŞE")))
+        .expect("AYŞE line");
+    let mehmet = paged
         .pages
         .iter()
         .flat_map(|p| p.lines.iter())
-        .any(|line| line.runs.iter().any(|r| r.text.contains("MEHMET")));
-    assert!(ayse_exists && mehmet_exists);
+        .find(|line| line.runs.iter().any(|r| r.text.contains("MEHMET")))
+        .expect("MEHMET line");
+    assert!((ayse.y_pt - mehmet.y_pt).abs() < 0.01);
+    assert!(ayse.right_x_pt < mehmet.x_pt);
 
     let pdf_bytes = export_pdf_bytes(&reloaded, &profile).expect("export PDF bytes");
     assert!(pdf_bytes.starts_with(b"%PDF-"));

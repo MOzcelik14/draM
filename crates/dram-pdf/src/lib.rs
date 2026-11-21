@@ -337,6 +337,17 @@ fn draw_paginated_line(
         draw_run(surface, run, cur_x, line.y_pt, profile, fonts);
         cur_x += run.text.chars().count() as f32 * profile.char_width_pt;
     }
+
+    if line.has_revision {
+        draw_text_ltr(
+            surface,
+            page_w - 36.0,
+            line.y_pt,
+            &fonts.bold,
+            profile.font_size_pt,
+            "*",
+        );
+    }
 }
 
 fn draw_run(

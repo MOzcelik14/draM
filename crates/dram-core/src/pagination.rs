@@ -1,6 +1,8 @@
 //! Screenplay pagination engine shared by the live editor and PDF exporter.
 
-use crate::model::{Document, ElementType, InlineStyle, PageSize, TextRun};
+use crate::model::{
+    Document, DualDialogueGroup, DualSide, ElementType, InlineStyle, PageSize, TextRun,
+};
 use crate::text::to_upper_for_lang;
 
 const PT_PER_INCH: f32 = 72.0;
@@ -142,8 +144,44 @@ impl LayoutProfile {
         }
     }
 
+    /// Returns `(left_x_pt, right_x_pt, align)` for a side-by-side dual-dialogue column.
+    #[must_use]
+    pub fn dual_column_bounds_pt(
+        &self,
+        side: DualSide,
+        kind: ElementType,
+    ) -> (f32, f32, LineAlign) {
+        let (page_w, _) = self.page_dimensions_pt();
+        let left_edge = self.margin_left_in * PT_PER_INCH;
+        let right_edge = page_w - self.margin_right_in * PT_PER_INCH;
+        let gutter_pt = 18.0;
+        let col_w = ((right_edge - left_edge - gutter_pt) * 0.5).max(self.char_width_pt * 12.0);
+        let (col_l, col_r) = match side {
+            DualSide::Left => (left_edge, left_edge + col_w),
+            DualSide::Right => (left_edge + col_w + gutter_pt, right_edge),
+        };
+        match kind {
+            ElementType::Character => (col_l, col_r, LineAlign::Center),
+            ElementType::Parenthetical => {
+                let indent = self.char_width_pt * 2.0;
+                (
+                    col_l + indent,
+                    (col_r - indent).max(col_l + indent + self.char_width_pt * 4.0),
+                    LineAlign::Left,
+                )
+            }
+            _ => (col_l, col_r, LineAlign::Left),
+        }
+    }
+
     fn max_chars_for(&self, kind: ElementType) -> usize {
         let (left, right, _) = self.column_bounds_pt(kind);
+        let width_pt = (right - left).max(self.char_width_pt);
+        (width_pt / self.char_width_pt).floor().max(1.0) as usize
+    }
+
+    fn dual_max_chars_for(&self, side: DualSide, kind: ElementType) -> usize {
+        let (left, right, _) = self.dual_column_bounds_pt(side, kind);
         let width_pt = (right - left).max(self.char_width_pt);
         (width_pt / self.char_width_pt).floor().max(1.0) as usize
     }
@@ -168,6 +206,8 @@ pub struct PaginatedLine {
     pub align: LineAlign,
     /// Optional scene number (attached to the first line of a `SceneHeading`).
     pub scene_number: Option<String>,
+    /// Whether this line belongs to a revised element (prints `*` in the right margin).
+    pub has_revision: bool,
 }
 
 /// A single paginated screenplay page.
@@ -209,6 +249,8 @@ struct WrappedBlock {
     lines: Vec<Vec<TextRun>>,
     blank_before: usize,
     scene_number: Option<String>,
+    dual_dialogue: Option<DualDialogueGroup>,
+    has_revision: bool,
 }
 
 /// Paginates `doc` using `profile`.
@@ -234,6 +276,8 @@ pub fn paginate(doc: &Document, profile: &LayoutProfile) -> PaginatedDocument {
                 lines: Vec::new(),
                 blank_before: 0,
                 scene_number: None,
+                dual_dialogue: None,
+                has_revision: false,
             });
             prev_emitted_kind = Some(ElementType::PageBreak);
             continue;
@@ -259,7 +303,11 @@ pub fn paginate(doc: &Document, profile: &LayoutProfile) -> PaginatedDocument {
             1
         };
 
-        let max_chars = profile.max_chars_for(el.kind);
+        let max_chars = if let Some(dual) = el.dual_dialogue {
+            profile.dual_max_chars_for(dual.side, el.kind)
+        } else {
+            profile.max_chars_for(el.kind)
+        };
         let mut runs = el.runs.clone();
         if el.kind.is_uppercase_convention() {
             for r in &mut runs {
@@ -280,6 +328,8 @@ pub fn paginate(doc: &Document, profile: &LayoutProfile) -> PaginatedDocument {
             lines: wrapped,
             blank_before,
             scene_number,
+            dual_dialogue: el.dual_dialogue,
+            has_revision: el.revision.is_some(),
         });
         prev_emitted_kind = Some(el.kind);
     }
@@ -313,6 +363,93 @@ pub fn paginate(doc: &Document, profile: &LayoutProfile) -> PaginatedDocument {
             last_character_block = None;
             i += 1;
             continue;
+        }
+
+        // Dual dialogue group: emit Left and Right columns side by side at matching Y coordinates.
+        if let Some(first_dual) = block.dual_dialogue {
+            let mut group_end = i + 1;
+            while group_end < blocks.len()
+                && blocks[group_end]
+                    .dual_dialogue
+                    .is_some_and(|d| d.group_id == first_dual.group_id)
+            {
+                group_end += 1;
+            }
+
+            let mut left_rows: Vec<(usize, ElementType, Vec<TextRun>, bool)> = Vec::new();
+            let mut right_rows: Vec<(usize, ElementType, Vec<TextRun>, bool)> = Vec::new();
+            for gb in &blocks[i..group_end] {
+                if let Some(d) = gb.dual_dialogue {
+                    let target = match d.side {
+                        DualSide::Left => &mut left_rows,
+                        DualSide::Right => &mut right_rows,
+                    };
+                    for l in &gb.lines {
+                        target.push((gb.element_index, gb.kind, l.clone(), gb.has_revision));
+                    }
+                }
+            }
+
+            if !left_rows.is_empty() && !right_rows.is_empty() {
+                let height = left_rows.len().max(right_rows.len());
+                let pre_blank = if cursor_line == 0 {
+                    0
+                } else {
+                    block.blank_before
+                };
+                if cursor_line > 0 && cursor_line + pre_blank + height > max_lines {
+                    flush_page(&mut pages, &mut current_lines, &mut cursor_line);
+                }
+                let effective_blank = if cursor_line == 0 {
+                    0
+                } else {
+                    block.blank_before
+                };
+                cursor_line += effective_blank;
+
+                for row in 0..height {
+                    if cursor_line >= max_lines {
+                        flush_page(&mut pages, &mut current_lines, &mut cursor_line);
+                    }
+                    let y_pt = profile.margin_top_in * PT_PER_INCH
+                        + (cursor_line as f32 + 1.0) * profile.line_height_pt;
+                    if let Some((el_idx, kind, runs, has_rev)) = left_rows.get(row) {
+                        let (x_pt, right_x_pt, align) =
+                            profile.dual_column_bounds_pt(DualSide::Left, *kind);
+                        current_lines.push(PaginatedLine {
+                            element_index: Some(*el_idx),
+                            kind: *kind,
+                            runs: runs.clone(),
+                            x_pt,
+                            right_x_pt,
+                            y_pt,
+                            align,
+                            scene_number: None,
+                            has_revision: *has_rev,
+                        });
+                    }
+                    if let Some((el_idx, kind, runs, has_rev)) = right_rows.get(row) {
+                        let (x_pt, right_x_pt, align) =
+                            profile.dual_column_bounds_pt(DualSide::Right, *kind);
+                        current_lines.push(PaginatedLine {
+                            element_index: Some(*el_idx),
+                            kind: *kind,
+                            runs: runs.clone(),
+                            x_pt,
+                            right_x_pt,
+                            y_pt,
+                            align,
+                            scene_number: None,
+                            has_revision: *has_rev,
+                        });
+                    }
+                    cursor_line += 1;
+                }
+
+                last_character_block = None;
+                i = group_end;
+                continue;
+            }
         }
 
         let effective_blank = if cursor_line == 0 {
@@ -387,6 +524,7 @@ pub fn paginate(doc: &Document, profile: &LayoutProfile) -> PaginatedDocument {
                             block.kind,
                             l.clone(),
                             None,
+                            block.has_revision,
                         );
                     }
                     break;
@@ -404,6 +542,7 @@ pub fn paginate(doc: &Document, profile: &LayoutProfile) -> PaginatedDocument {
                             block.kind,
                             l.clone(),
                             None,
+                            block.has_revision,
                         );
                     }
                     line_idx += take;
@@ -419,6 +558,7 @@ pub fn paginate(doc: &Document, profile: &LayoutProfile) -> PaginatedDocument {
                             doc.settings.dictionary.dialogue_more.clone(),
                         )],
                         None,
+                        false,
                     );
                 }
 
@@ -444,6 +584,7 @@ pub fn paginate(doc: &Document, profile: &LayoutProfile) -> PaginatedDocument {
                         ElementType::Character,
                         vec![TextRun::plain(contd_text)],
                         None,
+                        false,
                     );
                 }
             }
@@ -465,6 +606,7 @@ pub fn paginate(doc: &Document, profile: &LayoutProfile) -> PaginatedDocument {
                     block.kind,
                     line_runs.clone(),
                     sn,
+                    block.has_revision,
                 );
             }
         }
@@ -479,6 +621,7 @@ pub fn paginate(doc: &Document, profile: &LayoutProfile) -> PaginatedDocument {
     PaginatedDocument { pages }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_line(
     current_lines: &mut Vec<PaginatedLine>,
     profile: &LayoutProfile,
@@ -487,6 +630,7 @@ fn push_line(
     kind: ElementType,
     runs: Vec<TextRun>,
     scene_number: Option<String>,
+    has_revision: bool,
 ) {
     let (x_pt, right_x_pt, align) = profile.column_bounds_pt(kind);
     let y_pt =
@@ -500,6 +644,7 @@ fn push_line(
         y_pt,
         align,
         scene_number,
+        has_revision,
     });
     *cursor_line += 1;
 }
@@ -668,5 +813,50 @@ mod tests {
         let p2_first = &paged.pages[1].lines[0];
         let p2_first_text: String = p2_first.runs.iter().map(|r| r.text.as_str()).collect();
         assert_eq!(p2_first_text, "ÇİĞDEM (DEVAM)");
+    }
+
+    #[test]
+    fn dual_dialogue_paginates_side_by_side_in_two_columns() {
+        let mut doc = Document::new(ScriptLanguage::Tr);
+        doc.elements.clear();
+
+        let group_id = uuid::Uuid::new_v4();
+        let left_group = Some(DualDialogueGroup {
+            group_id,
+            side: DualSide::Left,
+        });
+        let right_group = Some(DualDialogueGroup {
+            group_id,
+            side: DualSide::Right,
+        });
+
+        let mut c1 = Element::new(ElementType::Character, "AYŞE");
+        c1.dual_dialogue = left_group;
+        let mut d1 = Element::new(ElementType::Dialogue, "Kapıyı kilitle.");
+        d1.dual_dialogue = left_group;
+
+        let mut c2 = Element::new(ElementType::Character, "MEHMET");
+        c2.dual_dialogue = right_group;
+        let mut d2 = Element::new(ElementType::Dialogue, "Hemen kilitliyorum.");
+        d2.dual_dialogue = right_group;
+
+        doc.elements.extend([c1, d1, c2, d2]);
+
+        let profile = LayoutProfile::for_page_size(PageSize::A4);
+        let paged = paginate(&doc, &profile);
+        assert_eq!(paged.page_count(), 1);
+
+        let lines = &paged.pages[0].lines;
+        let ayse = lines
+            .iter()
+            .find(|l| l.runs.iter().any(|r| r.text.contains("AYŞE")))
+            .expect("AYŞE line");
+        let mehmet = lines
+            .iter()
+            .find(|l| l.runs.iter().any(|r| r.text.contains("MEHMET")))
+            .expect("MEHMET line");
+
+        assert!((ayse.y_pt - mehmet.y_pt).abs() < 0.01);
+        assert!(ayse.right_x_pt < mehmet.x_pt);
     }
 }

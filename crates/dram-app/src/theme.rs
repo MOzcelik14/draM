@@ -1,5 +1,6 @@
 //! Typography and Fade In-inspired visual theme configuration for `dram-app`.
 
+use dram_core::InlineStyle;
 use eframe::egui::{
     self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Margin, Stroke, Vec2,
 };
@@ -7,11 +8,25 @@ use eframe::egui::{
 const COURIER_PRIME_REGULAR: &[u8] =
     include_bytes!("../../../assets/fonts/CourierPrime-Regular.ttf");
 const COURIER_PRIME_BOLD: &[u8] = include_bytes!("../../../assets/fonts/CourierPrime-Bold.ttf");
+const COURIER_PRIME_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/CourierPrime-Italic.ttf");
+const COURIER_PRIME_BOLD_ITALIC: &[u8] =
+    include_bytes!("../../../assets/fonts/CourierPrime-BoldItalic.ttf");
 
 /// Signature crimson accent used for active format items and active navigator scene cards.
 pub const ACCENT_CRIMSON: Color32 = Color32::from_rgb(163, 29, 29);
 /// Muted crimson card fill for active scene cards in the navigator.
 pub const ACCENT_CRIMSON_DARK: Color32 = Color32::from_rgb(120, 22, 22);
+
+/// Returns the registered [`FontFamily`] matching `style` (Regular, Bold, Italic, or BoldItalic).
+#[must_use]
+pub fn font_family_for_style(style: InlineStyle) -> FontFamily {
+    match (style.bold, style.italic) {
+        (false, false) => FontFamily::Monospace,
+        (true, false) => FontFamily::Name("courier_bold".into()),
+        (false, true) => FontFamily::Name("courier_italic".into()),
+        (true, true) => FontFamily::Name("courier_bold_italic".into()),
+    }
+}
 
 /// Registers embedded Courier Prime fonts for authentic screenplay typography in the editor.
 pub fn configure_fonts(ctx: &egui::Context) {
@@ -24,11 +39,40 @@ pub fn configure_fonts(ctx: &egui::Context) {
         "courier_prime_bold".to_string(),
         FontData::from_static(COURIER_PRIME_BOLD).into(),
     );
+    fonts.font_data.insert(
+        "courier_prime_italic".to_string(),
+        FontData::from_static(COURIER_PRIME_ITALIC).into(),
+    );
+    fonts.font_data.insert(
+        "courier_prime_bold_italic".to_string(),
+        FontData::from_static(COURIER_PRIME_BOLD_ITALIC).into(),
+    );
+
+    let fallback: Vec<String> = fonts
+        .families
+        .get(&FontFamily::Monospace)
+        .cloned()
+        .unwrap_or_default();
 
     if let Some(mono) = fonts.families.get_mut(&FontFamily::Monospace) {
         mono.insert(0, "courier_prime_regular".to_string());
     }
+
+    for (family_name, font_key) in [
+        ("courier_bold", "courier_prime_bold"),
+        ("courier_italic", "courier_prime_italic"),
+        ("courier_bold_italic", "courier_prime_bold_italic"),
+    ] {
+        let mut chain = Vec::with_capacity(fallback.len() + 1);
+        chain.push(font_key.to_string());
+        chain.extend(fallback.iter().cloned());
+        fonts
+            .families
+            .insert(FontFamily::Name(family_name.into()), chain);
+    }
+
     ctx.set_fonts(fonts);
+    ctx.set_zoom_factor(1.08);
 }
 
 /// Color tokens for the screenplay desk and crisp white paper sheet.
@@ -109,8 +153,9 @@ pub fn apply_theme(ctx: &egui::Context, dark: bool) {
     ctx.set_visuals(visuals);
 
     ctx.style_mut(|style| {
-        style.spacing.item_spacing = Vec2::new(6.0, 5.0);
-        style.spacing.button_padding = Vec2::new(9.0, 4.0);
+        style.spacing.item_spacing = Vec2::new(7.0, 5.0);
+        style.spacing.button_padding = Vec2::new(10.0, 5.0);
+        style.spacing.interact_size.y = 24.0;
         style.spacing.window_margin = Margin::same(12);
         style.spacing.menu_margin = Margin::same(6);
     });

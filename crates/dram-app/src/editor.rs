@@ -1,13 +1,16 @@
 //! Custom screenplay editor widget with Final Draft-style Tab/Enter flow.
 
+use std::collections::HashMap;
+
 use dram_core::text::{cmp_tr, to_lower_for_lang, to_upper_for_lang};
 use dram_core::{
-    Document, DualSide, EditCommand, Element, ElementType, InlineStyle, TextRun, UndoManager,
+    BuiltinSpellChecker, Document, DualSide, EditCommand, Element, ElementType, InlineStyle,
+    PaginatedDocument, RevisionMark, ScriptLanguage, SpellChecker, TextRun, UndoManager,
 };
 use eframe::egui;
 
 use crate::i18n::I18n;
-use crate::theme::paper_palette;
+use crate::theme::{font_family_for_style, paper_palette};
 
 /// All selectable screenplay element types for the toolbar and shortcuts.
 pub const ELEMENT_TYPES: [ElementType; 14] = [
@@ -54,6 +57,12 @@ pub struct EditorState {
     pub focused_index: usize,
     /// Element index that should receive keyboard focus on the next frame.
     pub pending_focus: Option<usize>,
+    /// Last known `egui::Id` of the focused element's `TextEdit`, used for selection-range formatting.
+    focused_widget_id: Option<egui::Id>,
+    /// Highlighted suggestion index in the inline autocomplete popup.
+    autocomplete_selected: usize,
+    /// Element index for which the user explicitly dismissed the autocomplete popup via `Escape`.
+    autocomplete_dismissed_for: Option<usize>,
 }
 
 impl Default for EditorState {
@@ -61,6 +70,9 @@ impl Default for EditorState {
         Self {
             focused_index: 0,
             pending_focus: Some(0),
+            focused_widget_id: None,
+            autocomplete_selected: 0,
+            autocomplete_dismissed_for: None,
         }
     }
 }
@@ -69,11 +81,16 @@ impl EditorState {
     /// Renders the screenplay page and handles Tab/Enter/Backspace/Ctrl+1..8 editing flow.
     ///
     /// Returns `true` if the document was modified.
+    #[allow(clippy::too_many_arguments)]
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         doc: &mut Document,
         undo: &mut UndoManager,
+        paged: &PaginatedDocument,
+        active_revision: Option<&RevisionMark>,
+        spell: Option<&BuiltinSpellChecker>,
+        added_dict_word: &mut Option<String>,
         i18n: &I18n,
         dark_theme: bool,
     ) -> bool {
@@ -113,16 +130,23 @@ impl EditorState {
         let suggestions = autocomplete_candidates(doc, self.focused_index);
         if !suggestions.is_empty() {
             egui::Frame::new()
-                .inner_margin(egui::Margin::symmetric(12, 6))
+                .fill(ui.visuals().faint_bg_color)
+                .inner_margin(egui::Margin::symmetric(14, 7))
                 .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
                     ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
                         ui.label(
                             egui::RichText::new(i18n.t("autocomplete-suggestions"))
-                                .small()
-                                .weak(),
+                                .size(13.0)
+                                .color(ui.visuals().text_color()),
                         );
                         for cand in suggestions.into_iter().take(6) {
-                            if ui.small_button(&cand).clicked() {
+                            let btn = egui::Button::new(
+                                egui::RichText::new(&cand).monospace().strong().size(13.0),
+                            )
+                            .min_size(egui::vec2(0.0, 26.0));
+                            if ui.add(btn).clicked() {
                                 let old_runs = doc.elements[self.focused_index].runs.clone();
                                 let new_runs = vec![TextRun::plain(cand)];
                                 if old_runs != new_runs
@@ -148,8 +172,26 @@ impl EditorState {
         }
 
         if let Some(attr) = detect_inline_format_shortcut(ui.ctx()) {
-            if toggle_element_inline_style(doc, undo, self.focused_index, attr) {
+            let char_range = self
+                .focused_widget_id
+                .and_then(|id| egui::TextEdit::load_state(ui.ctx(), id))
+                .and_then(|state| state.cursor.char_range())
+                .and_then(|range| {
+                    let start = range.primary.index.min(range.secondary.index);
+                    let end = range.primary.index.max(range.secondary.index);
+                    (start < end).then_some(start..end)
+                });
+            if toggle_element_inline_style_range(doc, undo, self.focused_index, attr, char_range) {
                 modified = true;
+            }
+        }
+
+        let mut page_starts: HashMap<usize, usize> = HashMap::new();
+        for page in &paged.pages {
+            if page.page_number > 1 {
+                if let Some(first_idx) = page.lines.iter().find_map(|l| l.element_index) {
+                    page_starts.entry(first_idx).or_insert(page.page_number);
+                }
             }
         }
 
@@ -158,6 +200,7 @@ impl EditorState {
         const EST_ROW_HEIGHT: f32 = 28.0;
 
         let mut action_after_loop: Option<EditorAction> = None;
+        let mut focused_rect: Option<egui::Rect> = None;
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -186,8 +229,18 @@ impl EditorState {
                                 }
 
                                 for idx in window_start..window_end {
+                                    if let Some(&page_num) = page_starts.get(&idx) {
+                                        draw_page_break_divider(
+                                            ui,
+                                            content_width,
+                                            page_num,
+                                            palette.muted_text,
+                                        );
+                                    }
+
                                     let el = &doc.elements[idx];
                                     let el_id = el.id;
+                                    let el_runs = el.runs.clone();
                                     let kind = el.kind;
                                     let is_focused = idx == self.focused_index;
                                     let dual_side = el.dual_dialogue.map(|d| d.side);
@@ -278,18 +331,19 @@ impl EditorState {
                                                     return;
                                                 }
 
-                                                let font_id = if matches!(
+                                                let default_bold = matches!(
                                                     kind,
                                                     ElementType::SceneHeading
                                                         | ElementType::Section(_)
-                                                ) {
-                                                    egui::FontId::monospace(15.5)
-                                                } else {
-                                                    egui::FontId::monospace(15.0)
-                                                };
+                                                );
+                                                let font_size =
+                                                    if default_bold { 15.5 } else { 15.0 };
 
                                                 let widget_id =
                                                     ui.make_persistent_id(("dram_elem", el_id));
+                                                if is_focused {
+                                                    self.focused_widget_id = Some(widget_id);
+                                                }
                                                 let text_color = if kind == ElementType::Synopsis
                                                     || kind == ElementType::Note
                                                 {
@@ -302,14 +356,36 @@ impl EditorState {
                                                 } else {
                                                     String::new()
                                                 };
+                                                let check_spelling = matches!(
+                                                    kind,
+                                                    ElementType::Action
+                                                        | ElementType::Dialogue
+                                                        | ElementType::Parenthetical
+                                                        | ElementType::General
+                                                        | ElementType::Synopsis
+                                                        | ElementType::Note
+                                                );
+                                                let mut layouter =
+                                                    |ui: &egui::Ui, buf: &str, wrap_width: f32| {
+                                                        let job = build_element_layout_job(
+                                                            &el_runs,
+                                                            buf,
+                                                            font_size,
+                                                            default_bold,
+                                                            text_color,
+                                                            wrap_width,
+                                                            if check_spelling { spell } else { None },
+                                                            script_lang,
+                                                        );
+                                                        ui.fonts(|f| f.layout_job(job))
+                                                    };
                                                 let edit = egui::TextEdit::multiline(&mut text)
                                                     .id(widget_id)
                                                     .desired_rows(1)
                                                     .desired_width(field_width)
                                                     .frame(false)
-                                                    .font(font_id)
+                                                    .layouter(&mut layouter)
                                                     .horizontal_align(align)
-                                                    .text_color(text_color)
                                                     .hint_text(
                                                         egui::RichText::new(hint)
                                                             .color(palette.muted_text),
@@ -317,15 +393,116 @@ impl EditorState {
 
                                                 let response = ui.add(edit);
 
+                                                if check_spelling {
+                                                    if let Some(checker) = spell {
+                                                        let mut replace_req: Option<(String, String)> =
+                                                            None;
+                                                        let misspelled =
+                                                            collect_misspelled_words(
+                                                                &text,
+                                                                checker,
+                                                                script_lang,
+                                                            );
+                                                        if !misspelled.is_empty() {
+                                                            response.context_menu(|ui| {
+                                                                for bad in misspelled.iter().take(3)
+                                                                {
+                                                                    ui.strong(bad);
+                                                                    let suggs = checker
+                                                                        .suggestions(
+                                                                            bad,
+                                                                            script_lang,
+                                                                        );
+                                                                    if suggs.is_empty() {
+                                                                        ui.label(
+                                                                            egui::RichText::new(
+                                                                                i18n.t(
+                                                                                    "spell-no-suggestions",
+                                                                                ),
+                                                                            )
+                                                                            .small()
+                                                                            .weak(),
+                                                                        );
+                                                                    } else {
+                                                                        for s in suggs {
+                                                                            if ui
+                                                                                .button(&s)
+                                                                                .clicked()
+                                                                            {
+                                                                                replace_req = Some(
+                                                                                    (
+                                                                                        bad.clone(),
+                                                                                        s,
+                                                                                    ),
+                                                                                );
+                                                                                ui.close_menu();
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    if ui
+                                                                        .button(
+                                                                            i18n.t(
+                                                                                "spell-add-dict",
+                                                                            ),
+                                                                        )
+                                                                        .clicked()
+                                                                    {
+                                                                        *added_dict_word =
+                                                                            Some(bad.clone());
+                                                                        ui.close_menu();
+                                                                    }
+                                                                    ui.separator();
+                                                                }
+                                                            });
+                                                        }
+                                                        if let Some((bad, good)) = replace_req {
+                                                            let updated =
+                                                                text.replacen(&bad, &good, 1);
+                                                            let old_runs =
+                                                                doc.elements[idx].runs.clone();
+                                                            let new_runs =
+                                                                update_runs_preserving_styles(
+                                                                    &old_runs,
+                                                                    &updated,
+                                                                );
+                                                            undo.break_coalescing();
+                                                            if undo
+                                                                .execute(
+                                                                    doc,
+                                                                    EditCommand::UpdateRuns {
+                                                                        index: idx,
+                                                                        old_runs,
+                                                                        new_runs,
+                                                                    },
+                                                                )
+                                                                .is_ok()
+                                                            {
+                                                                if let Some(rev) = active_revision {
+                                                                    doc.elements[idx].revision =
+                                                                        Some(rev.clone());
+                                                                }
+                                                                modified = true;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+
                                                 if self.pending_focus == Some(idx) {
                                                     response.request_focus();
                                                     response
                                                         .scroll_to_me(Some(egui::Align::Center));
+                                                    ui.ctx().request_repaint();
                                                     self.pending_focus = None;
                                                 }
 
                                                 if response.has_focus() {
+                                                    if self.focused_index != idx {
+                                                        self.autocomplete_selected = 0;
+                                                        self.autocomplete_dismissed_for = None;
+                                                    }
                                                     self.focused_index = idx;
+                                                    self.focused_widget_id = Some(widget_id);
+                                                    focused_rect = Some(response.rect);
 
                                                     let (
                                                         enter_pressed,
@@ -361,6 +538,7 @@ impl EditorState {
                                                 }
 
                                                 if response.changed() {
+                                                    self.autocomplete_dismissed_for = None;
                                                     let cleaned = text.replace('\n', "");
                                                     let final_text =
                                                         if kind.is_uppercase_convention() {
@@ -385,6 +563,10 @@ impl EditorState {
                                                             )
                                                             .is_ok()
                                                     {
+                                                        if let Some(rev) = active_revision {
+                                                            doc.elements[idx].revision =
+                                                                Some(rev.clone());
+                                                        }
                                                         modified = true;
                                                     }
                                                 }
@@ -404,18 +586,120 @@ impl EditorState {
                 ui.add_space(40.0);
             });
 
+        // Inline autocomplete popup directly beneath the focused Character / SceneHeading / Transition
+        if let Some(anchor_rect) = focused_rect {
+            if self.autocomplete_dismissed_for != Some(self.focused_index) {
+                let current_text = doc
+                    .elements
+                    .get(self.focused_index)
+                    .map(|e| e.plain_text())
+                    .unwrap_or_default();
+                if !current_text.trim().is_empty() {
+                    let candidates = autocomplete_candidates(doc, self.focused_index);
+                    let visible: Vec<String> = candidates.into_iter().take(6).collect();
+                    if !visible.is_empty() {
+                        if self.autocomplete_selected >= visible.len() {
+                            self.autocomplete_selected = 0;
+                        }
+                        let (down, up, esc, accept_key) = ui.ctx().input_mut(|input| {
+                            let d = input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown);
+                            let u = input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp);
+                            let e = input.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
+                            let a = input.consume_key(egui::Modifiers::COMMAND, egui::Key::Space);
+                            (d, u, e, a)
+                        });
+                        if esc {
+                            self.autocomplete_dismissed_for = Some(self.focused_index);
+                        } else {
+                            if down {
+                                self.autocomplete_selected =
+                                    (self.autocomplete_selected + 1) % visible.len();
+                            }
+                            if up {
+                                self.autocomplete_selected = if self.autocomplete_selected == 0 {
+                                    visible.len() - 1
+                                } else {
+                                    self.autocomplete_selected - 1
+                                };
+                            }
+
+                            let mut chosen: Option<String> = if accept_key {
+                                Some(visible[self.autocomplete_selected].clone())
+                            } else {
+                                None
+                            };
+
+                            egui::Area::new(ui.make_persistent_id("dram_inline_autocomplete"))
+                                .order(egui::Order::Foreground)
+                                .fixed_pos(anchor_rect.left_bottom() + egui::vec2(0.0, 4.0))
+                                .show(ui.ctx(), |ui| {
+                                    egui::Frame::popup(ui.style())
+                                        .inner_margin(egui::Margin::same(4))
+                                        .show(ui, |ui| {
+                                            ui.set_min_width(220.0);
+                                            for (c_idx, cand) in visible.iter().enumerate() {
+                                                let selected = c_idx == self.autocomplete_selected;
+                                                if ui
+                                                    .selectable_label(
+                                                        selected,
+                                                        egui::RichText::new(cand).monospace(),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    chosen = Some(cand.clone());
+                                                }
+                                            }
+                                        });
+                                });
+
+                            if let Some(cand) = chosen {
+                                let idx = self.focused_index;
+                                if let Some(el) = doc.elements.get(idx) {
+                                    let old_runs = el.runs.clone();
+                                    let new_runs = vec![TextRun::plain(cand)];
+                                    undo.break_coalescing();
+                                    if undo
+                                        .execute(
+                                            doc,
+                                            EditCommand::UpdateRuns {
+                                                index: idx,
+                                                old_runs,
+                                                new_runs,
+                                            },
+                                        )
+                                        .is_ok()
+                                    {
+                                        if let Some(rev) = active_revision {
+                                            doc.elements[idx].revision = Some(rev.clone());
+                                        }
+                                        self.pending_focus = Some(idx);
+                                        self.autocomplete_dismissed_for = Some(idx);
+                                        modified = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if let Some(act) = action_after_loop {
             match act {
                 EditorAction::InsertAfter(idx) => {
                     undo.break_coalescing();
                     let next_kind = doc.elements[idx].kind.next_on_enter();
                     let insert_idx = idx + 1;
+                    let mut new_el = Element::new(next_kind, "");
+                    if let Some(rev) = active_revision {
+                        new_el.revision = Some(rev.clone());
+                    }
                     if undo
                         .execute(
                             doc,
                             EditCommand::InsertElement {
                                 index: insert_idx,
-                                element: Element::new(next_kind, ""),
+                                element: new_el,
                             },
                         )
                         .is_ok()
@@ -611,6 +895,229 @@ fn detect_inline_format_shortcut(ctx: &egui::Context) -> Option<InlineFormatAttr
             None
         }
     })
+}
+
+fn draw_page_break_divider(
+    ui: &mut egui::Ui,
+    content_width: f32,
+    page_num: usize,
+    muted_color: egui::Color32,
+) {
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        ui.set_width(content_width);
+        let label_text = format!("{page_num}.");
+        let (line_rect, _) = ui.allocate_exact_size(
+            egui::vec2((content_width - 36.0).max(40.0), 14.0),
+            egui::Sense::hover(),
+        );
+        let y = line_rect.center().y;
+        let stroke = egui::Stroke::new(1.0_f32, muted_color.gamma_multiply(0.45));
+        let mut x = line_rect.left();
+        while x < line_rect.right() {
+            let seg_end = (x + 6.0).min(line_rect.right());
+            ui.painter()
+                .line_segment([egui::pos2(x, y), egui::pos2(seg_end, y)], stroke);
+            x += 10.0;
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(label_text)
+                    .monospace()
+                    .small()
+                    .color(muted_color),
+            );
+        });
+    });
+    ui.add_space(6.0);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_element_layout_job(
+    runs: &[TextRun],
+    text: &str,
+    font_size: f32,
+    default_bold: bool,
+    text_color: egui::Color32,
+    wrap_width: f32,
+    spell: Option<&BuiltinSpellChecker>,
+    lang: ScriptLanguage,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = wrap_width;
+
+    if text.is_empty() {
+        return job;
+    }
+
+    let styled_runs = update_runs_preserving_styles(runs, text);
+    for run in styled_runs {
+        let mut style = run.style;
+        if default_bold {
+            style.bold = true;
+        }
+        let base_format = egui::TextFormat {
+            font_id: egui::FontId::new(font_size, font_family_for_style(style)),
+            color: text_color,
+            underline: if style.underline {
+                egui::Stroke::new(1.0_f32, text_color)
+            } else {
+                egui::Stroke::NONE
+            },
+            ..Default::default()
+        };
+
+        if let Some(checker) = spell {
+            for (chunk, is_word) in split_word_chunks(&run.text) {
+                let mut fmt = base_format.clone();
+                if is_word && !checker.check_word(chunk, lang) {
+                    fmt.underline =
+                        egui::Stroke::new(1.2_f32, egui::Color32::from_rgb(220, 60, 60));
+                }
+                job.append(chunk, 0.0, fmt);
+            }
+        } else {
+            job.append(&run.text, 0.0, base_format);
+        }
+    }
+
+    job
+}
+
+fn split_word_chunks(text: &str) -> Vec<(&str, bool)> {
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+    let mut in_word: Option<bool> = None;
+
+    for (idx, ch) in text.char_indices() {
+        let is_w = ch.is_alphabetic() || ch == '\'';
+        if let Some(cur) = in_word {
+            if cur != is_w {
+                chunks.push((&text[start..idx], cur));
+                start = idx;
+                in_word = Some(is_w);
+            }
+        } else {
+            in_word = Some(is_w);
+        }
+    }
+    if start < text.len() {
+        chunks.push((&text[start..], in_word.unwrap_or(false)));
+    }
+    chunks
+}
+
+fn collect_misspelled_words(
+    text: &str,
+    checker: &BuiltinSpellChecker,
+    lang: ScriptLanguage,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for (chunk, is_word) in split_word_chunks(text) {
+        if is_word && !checker.check_word(chunk, lang) {
+            let trimmed = chunk.trim_matches('\'');
+            if !trimmed.is_empty() && !out.iter().any(|w| w == trimmed) {
+                out.push(trimmed.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Toggles an inline style attribute either on `char_range` (if `Some(start..end)` with `start < end`)
+/// or across the entire element at `index` (if `None`).
+pub fn toggle_element_inline_style_range(
+    doc: &mut Document,
+    undo: &mut UndoManager,
+    index: usize,
+    attr: InlineFormatAttr,
+    char_range: Option<std::ops::Range<usize>>,
+) -> bool {
+    let Some(range) = char_range.filter(|r| r.start < r.end) else {
+        return toggle_element_inline_style(doc, undo, index, attr);
+    };
+
+    let Some(el) = doc.elements.get(index) else {
+        return false;
+    };
+    if el.runs.is_empty() {
+        return false;
+    }
+
+    let old_runs = el.runs.clone();
+    // Split runs into (text, style, inside_selection) segments by char index.
+    let mut segments: Vec<(String, InlineStyle, bool)> = Vec::new();
+    let mut char_cursor = 0usize;
+
+    for run in &old_runs {
+        let run_chars: Vec<char> = run.text.chars().collect();
+        let run_start = char_cursor;
+        let run_end = run_start + run_chars.len();
+        char_cursor = run_end;
+
+        if run_end <= range.start || run_start >= range.end {
+            segments.push((run.text.clone(), run.style, false));
+            continue;
+        }
+
+        let sel_local_start = range.start.saturating_sub(run_start);
+        let sel_local_end = range.end.min(run_end) - run_start;
+
+        if sel_local_start > 0 {
+            let pre: String = run_chars[..sel_local_start].iter().collect();
+            segments.push((pre, run.style, false));
+        }
+        if sel_local_end > sel_local_start {
+            let mid: String = run_chars[sel_local_start..sel_local_end].iter().collect();
+            segments.push((mid, run.style, true));
+        }
+        if sel_local_end < run_chars.len() {
+            let post: String = run_chars[sel_local_end..].iter().collect();
+            segments.push((post, run.style, false));
+        }
+    }
+
+    let has_selected = segments.iter().any(|(_, _, sel)| *sel);
+    if !has_selected {
+        return false;
+    }
+
+    let all_set = segments
+        .iter()
+        .filter(|(_, _, sel)| *sel)
+        .all(|(_, style, _)| match attr {
+            InlineFormatAttr::Bold => style.bold,
+            InlineFormatAttr::Italic => style.italic,
+            InlineFormatAttr::Underline => style.underline,
+        });
+    let target = !all_set;
+
+    let mut new_runs: Vec<TextRun> = Vec::new();
+    for (text, mut style, sel) in segments {
+        if sel {
+            match attr {
+                InlineFormatAttr::Bold => style.bold = target,
+                InlineFormatAttr::Italic => style.italic = target,
+                InlineFormatAttr::Underline => style.underline = target,
+            }
+        }
+        push_merged_run(&mut new_runs, &text, style);
+    }
+
+    if old_runs == new_runs {
+        return false;
+    }
+
+    undo.break_coalescing();
+    undo.execute(
+        doc,
+        EditCommand::UpdateRuns {
+            index,
+            old_runs,
+            new_runs,
+        },
+    )
+    .is_ok()
 }
 
 /// Toggles an inline style attribute across all runs of the element at `index`.
@@ -862,5 +1369,40 @@ mod tests {
         assert_eq!(compute_element_window(80, 10), (0, 80));
         assert_eq!(compute_element_window(500, 200), (140, 261));
         assert_eq!(compute_element_window(500, 0), (0, 61));
+    }
+
+    #[test]
+    fn toggle_inline_style_range_styles_only_selected_turkish_slice() {
+        let mut doc = Document::new(dram_core::ScriptLanguage::Tr);
+        let mut undo = UndoManager::new();
+        doc.elements[0] = Element::new(ElementType::Action, "Şehir ışıklarla parlar.");
+
+        // Select "ışıklarla" (char indices 6..15)
+        assert!(toggle_element_inline_style_range(
+            &mut doc,
+            &mut undo,
+            0,
+            InlineFormatAttr::Bold,
+            Some(6..15),
+        ));
+        let runs = &doc.elements[0].runs;
+        assert_eq!(runs.len(), 3);
+        assert_eq!(runs[0].text, "Şehir ");
+        assert!(!runs[0].style.bold);
+        assert_eq!(runs[1].text, "ışıklarla");
+        assert!(runs[1].style.bold);
+        assert_eq!(runs[2].text, " parlar.");
+        assert!(!runs[2].style.bold);
+
+        // Toggle off same range -> merges back into a single plain run
+        assert!(toggle_element_inline_style_range(
+            &mut doc,
+            &mut undo,
+            0,
+            InlineFormatAttr::Bold,
+            Some(6..15),
+        ));
+        assert_eq!(doc.elements[0].runs.len(), 1);
+        assert!(!doc.elements[0].runs[0].style.bold);
     }
 }

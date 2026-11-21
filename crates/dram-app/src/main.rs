@@ -6,6 +6,7 @@ mod editor;
 mod i18n;
 mod theme;
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -14,8 +15,10 @@ use anyhow::Result;
 use chrono::Utc;
 use dram_core::text::{cmp_tr, contains_case_insensitive};
 use dram_core::{
-    paginate, Document, DualDialogueGroup, DualSide, EditCommand, ElementType, LayoutProfile, Note,
-    PageSize, PaginatedDocument, RevisionMark, ScriptLanguage, TextRun, UndoManager,
+    breakdown_to_csv, document_from_template, generate_breakdown, paginate, BuiltinSpellChecker,
+    Document, DualDialogueGroup, DualSide, EditCommand, Element, ElementType, LayoutProfile, Note,
+    PageSize, PaginatedDocument, ProjectTemplate, RevisionMark, ScriptLanguage, SpellChecker,
+    TextRun, UndoManager,
 };
 use dram_format::{
     load_dram, load_fadein, load_fdx, parse_fountain, recovery_path_for, remove_recovery,
@@ -37,6 +40,7 @@ fn main() -> Result<()> {
     let initial_ui_lang = UiLanguage::detect_system();
     let i18n = I18n::new(initial_ui_lang);
     let title = i18n.t("app-title");
+    let initial_file = std::env::args_os().nth(1).map(PathBuf::from);
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -51,7 +55,7 @@ fn main() -> Result<()> {
         native_options,
         Box::new(|cc| {
             theme::configure_fonts(&cc.egui_ctx);
-            Ok(Box::new(DramApp::new(i18n)))
+            Ok(Box::new(DramApp::new(i18n, initial_file)))
         }),
     )
     .map_err(|err| anyhow::anyhow!("eframe error: {err}"))
@@ -63,6 +67,18 @@ enum InspectorTab {
     Characters,
     Locations,
     Notes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ViewMode {
+    Editor,
+    BeatBoard,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReportTab {
+    Characters,
+    Locations,
 }
 
 struct DramApp {
@@ -80,6 +96,12 @@ struct DramApp {
     allow_close: bool,
     show_navigator: bool,
     inspector_tab: InspectorTab,
+    view_mode: ViewMode,
+    revision_mode: bool,
+    active_revision_color: String,
+    show_reports_dialog: bool,
+    report_tab: ReportTab,
+    report_status: Option<String>,
     dark_theme: bool,
     focus_mode: bool,
     show_find_replace: bool,
@@ -97,10 +119,15 @@ struct DramApp {
     pagination_dirty: bool,
     last_autosave: Instant,
     pending_recovery_path: Option<PathBuf>,
+    recent_files: Vec<PathBuf>,
+    spellcheck_enabled: bool,
+    spellchecker: BuiltinSpellChecker,
+    asset_textures: HashMap<String, egui::TextureHandle>,
+    preview_asset_path: Option<String>,
 }
 
 impl DramApp {
-    fn new(i18n: I18n) -> Self {
+    fn new(i18n: I18n, initial_file: Option<PathBuf>) -> Self {
         let script_lang = match i18n.active() {
             UiLanguage::Tr => ScriptLanguage::Tr,
             UiLanguage::En => ScriptLanguage::En,
@@ -110,7 +137,11 @@ impl DramApp {
         let cached_pagination = paginate(&doc, &profile);
         let unsaved_rec = recovery_path_for(&std::env::temp_dir().join("dram_unsaved.dram"));
         let pending_recovery_path = unsaved_rec.exists().then_some(unsaved_rec);
-        Self {
+        let recent_files = load_recent_files();
+        let mut spellchecker = BuiltinSpellChecker::new();
+        spellchecker.load_user_words(&load_user_dict());
+        spellchecker.sync_document_terms(&doc);
+        let mut app = Self {
             doc,
             undo: UndoManager::new(),
             editor: EditorState::default(),
@@ -125,6 +156,12 @@ impl DramApp {
             allow_close: false,
             show_navigator: true,
             inspector_tab: InspectorTab::Format,
+            view_mode: ViewMode::Editor,
+            revision_mode: false,
+            active_revision_color: "blue".to_string(),
+            show_reports_dialog: false,
+            report_tab: ReportTab::Characters,
+            report_status: None,
             dark_theme: true,
             focus_mode: false,
             show_find_replace: false,
@@ -142,7 +179,16 @@ impl DramApp {
             pagination_dirty: false,
             last_autosave: Instant::now(),
             pending_recovery_path,
+            recent_files,
+            spellcheck_enabled: true,
+            spellchecker,
+            asset_textures: HashMap::new(),
+            preview_asset_path: None,
+        };
+        if let Some(path) = initial_file {
+            app.open_path(&path);
         }
+        app
     }
 
     fn mark_dirty(&mut self) {
@@ -154,6 +200,7 @@ impl DramApp {
         if self.pagination_dirty {
             let profile = LayoutProfile::for_page_size(self.doc.settings.page_size);
             self.cached_pagination = paginate(&self.doc, &profile);
+            self.spellchecker.sync_document_terms(&self.doc);
             self.pagination_dirty = false;
         }
     }
@@ -162,6 +209,19 @@ impl DramApp {
         self.current_path
             .clone()
             .unwrap_or_else(|| std::env::temp_dir().join("dram_unsaved.dram"))
+    }
+
+    fn push_recent_file(&mut self, path: &Path) {
+        let pb = path.to_path_buf();
+        self.recent_files.retain(|p| p != &pb);
+        self.recent_files.insert(0, pb);
+        self.recent_files.truncate(8);
+        save_recent_files(&self.recent_files);
+    }
+
+    fn clear_recent_files(&mut self) {
+        self.recent_files.clear();
+        save_recent_files(&self.recent_files);
     }
 
     fn new_document(&mut self) {
@@ -174,6 +234,91 @@ impl DramApp {
         self.status_error = None;
     }
 
+    fn new_from_template(&mut self, template: ProjectTemplate) {
+        self.doc = document_from_template(template, self.doc.settings.script_language);
+        self.undo.clear();
+        self.editor = EditorState::default();
+        self.current_path = None;
+        self.mark_dirty();
+        self.status_error = None;
+    }
+
+    fn open_path(&mut self, path: &Path) {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase());
+        match ext.as_deref() {
+            Some("fountain") | Some("txt") => match fs::read_to_string(path) {
+                Ok(content) => {
+                    self.doc = parse_fountain(&content, self.doc.settings.script_language);
+                    self.undo.clear();
+                    self.editor = EditorState::default();
+                    self.current_path = None;
+                    self.mark_dirty();
+                    self.status_error = None;
+                    self.push_recent_file(path);
+                }
+                Err(err) => {
+                    let mut args = FluentArgs::new();
+                    args.set("reason", err.to_string());
+                    self.status_error = Some(self.i18n.t_args("error-open-failed", &args));
+                }
+            },
+            Some("fdx") => match load_fdx(path, self.doc.settings.script_language) {
+                Ok(loaded) => {
+                    self.doc = loaded;
+                    self.undo.clear();
+                    self.editor = EditorState::default();
+                    self.current_path = None;
+                    self.mark_dirty();
+                    self.status_error = None;
+                    self.push_recent_file(path);
+                }
+                Err(err) => {
+                    let mut args = FluentArgs::new();
+                    args.set("reason", err.to_string());
+                    self.status_error = Some(self.i18n.t_args("error-open-failed", &args));
+                }
+            },
+            Some("fadein") => match load_fadein(path, self.doc.settings.script_language) {
+                Ok(loaded) => {
+                    self.doc = loaded;
+                    self.undo.clear();
+                    self.editor = EditorState::default();
+                    self.current_path = None;
+                    self.mark_dirty();
+                    self.status_error = None;
+                    self.push_recent_file(path);
+                }
+                Err(err) => {
+                    let mut args = FluentArgs::new();
+                    args.set("reason", err.to_string());
+                    self.status_error = Some(self.i18n.t_args("error-open-failed", &args));
+                }
+            },
+            _ => match load_dram(path) {
+                Ok(loaded) => {
+                    let rec = recovery_path_for(path);
+                    self.pending_recovery_path = rec.exists().then_some(rec);
+                    self.doc = loaded;
+                    self.undo.clear();
+                    self.editor = EditorState::default();
+                    self.current_path = Some(path.to_path_buf());
+                    self.dirty = false;
+                    self.pagination_dirty = true;
+                    self.status_error = None;
+                    self.push_recent_file(path);
+                }
+                Err(err) => {
+                    let mut args = FluentArgs::new();
+                    args.set("reason", err.to_string());
+                    self.status_error = Some(self.i18n.t_args("error-open-failed", &args));
+                }
+            },
+        }
+    }
+
     fn open_dram(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("draM", &["dram"])
@@ -181,24 +326,7 @@ impl DramApp {
         else {
             return;
         };
-        match load_dram(&path) {
-            Ok(loaded) => {
-                let rec = recovery_path_for(&path);
-                self.pending_recovery_path = rec.exists().then_some(rec);
-                self.doc = loaded;
-                self.undo.clear();
-                self.editor = EditorState::default();
-                self.current_path = Some(path);
-                self.dirty = false;
-                self.pagination_dirty = true;
-                self.status_error = None;
-            }
-            Err(err) => {
-                let mut args = FluentArgs::new();
-                args.set("reason", err.to_string());
-                self.status_error = Some(self.i18n.t_args("error-open-failed", &args));
-            }
-        }
+        self.open_path(&path);
     }
 
     fn save_current(&mut self) {
@@ -231,6 +359,7 @@ impl DramApp {
                 self.current_path = Some(path.to_path_buf());
                 self.dirty = false;
                 self.status_error = None;
+                self.push_recent_file(path);
             }
             Err(err) => {
                 let mut args = FluentArgs::new();
@@ -655,23 +784,49 @@ impl DramApp {
         egui::SidePanel::right("fadein_dock")
             .frame(dock_frame)
             .resizable(true)
-            .default_width(300.0)
-            .min_width(260.0)
+            .default_width(330.0)
+            .min_width(305.0)
             .show(ctx, |ui| {
-                // Top section: equal-width 4-tab bar (Format | Characters | Locations | Notes)
+                // Top section: single-line 4-tab bar (Format | Characters | Locations | Notes)
                 let tabs = [
                     (InspectorTab::Format, "tab-format"),
                     (InspectorTab::Characters, "tab-characters"),
                     (InspectorTab::Locations, "tab-locations"),
                     (InspectorTab::Notes, "tab-notes"),
                 ];
-                ui.columns(4, |cols| {
-                    for (i, (tab, key)) in tabs.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    let gap = 5.0_f32;
+                    ui.spacing_mut().item_spacing.x = gap;
+                    ui.spacing_mut().button_padding = egui::vec2(6.0, 5.0);
+                    let total_w = ui.available_width();
+                    let usable = (total_w - gap * 3.0).max(200.0);
+                    let labels: Vec<String> =
+                        tabs.iter().map(|(_, key)| self.i18n.t(key)).collect();
+                    let weights: Vec<f32> = labels
+                        .iter()
+                        .map(|l| l.chars().count() as f32 + 3.0)
+                        .collect();
+                    let weight_sum: f32 = weights.iter().sum();
+                    let mut used_w = 0.0_f32;
+
+                    for (i, ((tab, _), label)) in tabs.iter().zip(labels.iter()).enumerate() {
+                        let w = if i + 1 == tabs.len() {
+                            (usable - used_w).max(40.0)
+                        } else {
+                            let part = (usable * (weights[i] / weight_sum)).floor();
+                            used_w += part;
+                            part
+                        };
                         let active = self.inspector_tab == *tab;
-                        let btn = egui::Button::new(egui::RichText::new(self.i18n.t(key)).small())
-                            .min_size(egui::vec2(cols[i].available_width(), 24.0))
+                        let mut text = egui::RichText::new(label).size(12.5);
+                        if active {
+                            text = text.strong().color(egui::Color32::WHITE);
+                        }
+                        let btn = egui::Button::new(text)
+                            .wrap_mode(egui::TextWrapMode::Extend)
+                            .min_size(egui::vec2(w, 28.0))
                             .selected(active);
-                        if cols[i].add(btn).clicked() {
+                        if ui.add(btn).clicked() {
                             self.inspector_tab = *tab;
                         }
                     }
@@ -798,7 +953,7 @@ impl DramApp {
                                                 egui::Button::new(
                                                     egui::RichText::new(label)
                                                         .strong()
-                                                        .small()
+                                                        .size(13.0)
                                                         .color(title_color),
                                                 )
                                                 .frame(false),
@@ -835,7 +990,7 @@ impl DramApp {
                                     page_args.set("current", *page_num);
                                     page_args.set("total", total_pages);
                                     let sub_color = if is_current {
-                                        egui::Color32::from_rgb(235, 215, 215)
+                                        egui::Color32::from_rgb(240, 222, 222)
                                     } else {
                                         ui.visuals().weak_text_color()
                                     };
@@ -843,14 +998,16 @@ impl DramApp {
                                         egui::RichText::new(
                                             self.i18n.t_args("page-x-of-y", &page_args),
                                         )
-                                        .small()
+                                        .size(11.5)
                                         .color(sub_color),
                                     );
                                     if !snippet.trim().is_empty() {
                                         let truncated: String =
                                             snippet.trim().chars().take(54).collect();
                                         ui.label(
-                                            egui::RichText::new(truncated).small().color(sub_color),
+                                            egui::RichText::new(truncated)
+                                                .size(11.5)
+                                                .color(sub_color),
                                         );
                                     }
                                 });
@@ -890,26 +1047,59 @@ impl DramApp {
             .map_or(ElementType::Action, |e| e.kind);
 
         for (idx, &kind) in ELEMENT_TYPES.iter().enumerate() {
-            let label = if idx < 8 {
-                format!("{}  {}", idx + 1, self.i18n.t(element_type_i18n_key(kind)))
-            } else {
-                format!("    {}", self.i18n.t(element_type_i18n_key(kind)))
-            };
             let is_active = current_kind == kind;
-            let text = if is_active {
-                egui::RichText::new(label)
-                    .color(egui::Color32::WHITE)
-                    .strong()
+            let row_fill = if is_active {
+                theme::ACCENT_CRIMSON
             } else {
-                egui::RichText::new(label)
+                egui::Color32::TRANSPARENT
             };
-            let mut btn = egui::Button::new(text).min_size(egui::vec2(ui.available_width(), 22.0));
-            if is_active {
-                btn = btn.fill(theme::ACCENT_CRIMSON);
+            let text_color = if is_active {
+                egui::Color32::WHITE
             } else {
-                btn = btn.frame(false);
-            }
-            if ui.add(btn).clicked()
+                ui.visuals().text_color()
+            };
+            let num_color = if is_active {
+                egui::Color32::from_rgb(245, 220, 220)
+            } else {
+                ui.visuals().weak_text_color()
+            };
+
+            let resp = egui::Frame::new()
+                .fill(row_fill)
+                .corner_radius(egui::CornerRadius::same(4))
+                .inner_margin(egui::Margin::symmetric(8, 4))
+                .show(ui, |ui| {
+                    ui.set_width((ui.available_width() - 4.0).max(80.0));
+                    ui.spacing_mut().interact_size.y = 18.0;
+                    ui.horizontal(|ui| {
+                        let shortcut = if idx < 8 {
+                            format!("{}", idx + 1)
+                        } else {
+                            String::new()
+                        };
+                        ui.add_sized(
+                            egui::vec2(18.0, 18.0),
+                            egui::Label::new(
+                                egui::RichText::new(shortcut)
+                                    .monospace()
+                                    .size(12.5)
+                                    .color(num_color),
+                            ),
+                        );
+                        let mut label =
+                            egui::RichText::new(self.i18n.t(element_type_i18n_key(kind)))
+                                .size(13.5)
+                                .color(text_color);
+                        if is_active {
+                            label = label.strong();
+                        }
+                        ui.label(label);
+                    });
+                })
+                .response
+                .interact(egui::Sense::click());
+
+            if resp.clicked()
                 && !is_active
                 && self
                     .undo
@@ -1000,6 +1190,54 @@ impl DramApp {
         }
     }
 
+    fn ensure_asset_texture(
+        &mut self,
+        ctx: &egui::Context,
+        asset_path: &str,
+    ) -> Option<egui::TextureId> {
+        if let Some(tex) = self.asset_textures.get(asset_path) {
+            return Some(tex.id());
+        }
+        let bytes = self.doc.assets.get(asset_path)?;
+        let img = image::load_from_memory(bytes).ok()?.to_rgba8();
+        let size = [img.width() as usize, img.height() as usize];
+        let color_image = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
+        let handle = ctx.load_texture(
+            format!("dram_asset_{asset_path}"),
+            color_image,
+            egui::TextureOptions::LINEAR,
+        );
+        let id = handle.id();
+        self.asset_textures.insert(asset_path.to_string(), handle);
+        Some(id)
+    }
+
+    fn show_asset_preview_window(&mut self, ctx: &egui::Context) {
+        let Some(asset_path) = self.preview_asset_path.clone() else {
+            return;
+        };
+        let _ = self.ensure_asset_texture(ctx, &asset_path);
+        let mut open = true;
+        egui::Window::new(self.i18n.t("notes-preview-title"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(540.0)
+            .show(ctx, |ui| {
+                if let Some(tex) = self.asset_textures.get(&asset_path) {
+                    let orig = tex.size_vec2();
+                    let max_w = ui.available_width().clamp(240.0, 760.0);
+                    let scale = (max_w / orig.x.max(1.0))
+                        .min(520.0 / orig.y.max(1.0))
+                        .min(1.0);
+                    ui.image((tex.id(), orig * scale));
+                }
+            });
+        if !open {
+            self.preview_asset_path = None;
+        }
+    }
+
     fn render_notes_tab(&mut self, ui: &mut egui::Ui) {
         if ui.small_button(self.i18n.t("notes-add")).clicked() {
             self.doc.notes.push(Note {
@@ -1011,12 +1249,28 @@ impl DramApp {
                     .map(|e| e.id),
                 title: String::new(),
                 body: String::new(),
+                asset_path: None,
                 created_at: Utc::now(),
             });
             self.mark_dirty();
         }
         ui.add_space(6.0);
+
+        // Preload textures for all attached note images.
+        let paths_to_load: Vec<String> = self
+            .doc
+            .notes
+            .iter()
+            .filter_map(|n| n.asset_path.clone())
+            .collect();
+        for path in &paths_to_load {
+            let _ = self.ensure_asset_texture(ui.ctx(), path);
+        }
+
         let mut delete_idx: Option<usize> = None;
+        let mut attach_idx: Option<usize> = None;
+        let mut remove_img_idx: Option<usize> = None;
+        let mut preview_req: Option<String> = None;
         let mut notes_changed = false;
         for (idx, note) in self.doc.notes.iter_mut().enumerate() {
             ui.group(|ui| {
@@ -1046,14 +1300,90 @@ impl DramApp {
                 {
                     notes_changed = true;
                 }
+
+                if let Some(ref asset_path) = note.asset_path {
+                    if let Some(tex) = self.asset_textures.get(asset_path) {
+                        ui.add_space(4.0);
+                        let orig = tex.size_vec2();
+                        let scale = (210.0 / orig.x.max(1.0))
+                            .min(120.0 / orig.y.max(1.0))
+                            .min(1.0);
+                        let img_resp = ui.add(
+                            egui::Image::new((tex.id(), orig * scale)).sense(egui::Sense::click()),
+                        );
+                        if img_resp.clicked() {
+                            preview_req = Some(asset_path.clone());
+                        }
+                    }
+                    if ui.small_button(self.i18n.t("notes-remove-image")).clicked() {
+                        remove_img_idx = Some(idx);
+                    }
+                } else if ui.small_button(self.i18n.t("notes-attach-image")).clicked() {
+                    attach_idx = Some(idx);
+                }
             });
             ui.add_space(4.0);
         }
         if notes_changed {
             self.mark_dirty();
         }
+        if let Some(path) = preview_req {
+            self.preview_asset_path = Some(path);
+        }
+        if let Some(idx) = remove_img_idx {
+            if let Some(old_path) = self.doc.notes[idx].asset_path.take() {
+                let still_used = self
+                    .doc
+                    .notes
+                    .iter()
+                    .any(|n| n.asset_path.as_deref() == Some(old_path.as_str()));
+                if !still_used {
+                    self.doc.assets.remove(&old_path);
+                    self.asset_textures.remove(&old_path);
+                }
+                self.mark_dirty();
+            }
+        }
+        if let Some(idx) = attach_idx {
+            if let Some(file_path) = rfd::FileDialog::new()
+                .add_filter("Image", &["png", "jpg", "jpeg"])
+                .pick_file()
+            {
+                const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+                match fs::read(&file_path) {
+                    Ok(bytes) if !bytes.is_empty() && bytes.len() <= MAX_IMAGE_BYTES => {
+                        let ext = file_path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .map(|e| e.to_ascii_lowercase())
+                            .unwrap_or_else(|| "png".to_string());
+                        let key = format!("assets/{}.{ext}", Uuid::new_v4());
+                        self.doc.assets.insert(key.clone(), bytes);
+                        self.doc.notes[idx].asset_path = Some(key);
+                        self.mark_dirty();
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        let mut args = FluentArgs::new();
+                        args.set("reason", err.to_string());
+                        self.status_error = Some(self.i18n.t_args("error-open-failed", &args));
+                    }
+                }
+            }
+        }
         if let Some(i) = delete_idx {
-            self.doc.notes.remove(i);
+            let removed = self.doc.notes.remove(i);
+            if let Some(old_path) = removed.asset_path {
+                let still_used = self
+                    .doc
+                    .notes
+                    .iter()
+                    .any(|n| n.asset_path.as_deref() == Some(old_path.as_str()));
+                if !still_used {
+                    self.doc.assets.remove(&old_path);
+                    self.asset_textures.remove(&old_path);
+                }
+            }
             self.mark_dirty();
         }
     }
@@ -1096,43 +1426,153 @@ impl DramApp {
             return;
         }
         let mut open = self.show_title_page_editor;
+        let palette = theme::paper_palette(self.dark_theme);
         egui::Window::new(self.i18n.t("title-page-heading"))
             .open(&mut open)
             .resizable(true)
-            .default_width(420.0)
+            .default_width(720.0)
             .show(ctx, |ui| {
                 let mut tp_changed = false;
-                egui::Grid::new("title_page_grid")
-                    .num_columns(2)
-                    .spacing([12.0, 8.0])
-                    .show(ui, |ui| {
-                        let tp = &mut self.doc.title_page;
-                        let mut row = |label_key: &str, val: &mut String, multiline: bool| {
-                            ui.label(self.i18n.t(label_key));
-                            let changed = if multiline {
-                                ui.add(
-                                    egui::TextEdit::multiline(val)
-                                        .desired_rows(2)
-                                        .desired_width(260.0),
-                                )
-                                .changed()
-                            } else {
-                                ui.add(egui::TextEdit::singleline(val).desired_width(260.0))
-                                    .changed()
-                            };
-                            if changed {
-                                tp_changed = true;
-                            }
-                            ui.end_row();
-                        };
-                        row("tp-title", &mut tp.title, false);
-                        row("tp-credit", &mut tp.credit, false);
-                        row("tp-author", &mut tp.author, false);
-                        row("tp-source", &mut tp.source, false);
-                        row("tp-draft-date", &mut tp.draft_date, false);
-                        row("tp-contact", &mut tp.contact, true);
-                        row("tp-copyright", &mut tp.copyright, false);
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
+                        egui::Grid::new("title_page_grid")
+                            .num_columns(2)
+                            .spacing([12.0, 8.0])
+                            .show(ui, |ui| {
+                                let tp = &mut self.doc.title_page;
+                                let mut row =
+                                    |label_key: &str, val: &mut String, multiline: bool| {
+                                        ui.label(self.i18n.t(label_key));
+                                        let changed = if multiline {
+                                            ui.add(
+                                                egui::TextEdit::multiline(val)
+                                                    .desired_rows(2)
+                                                    .desired_width(240.0),
+                                            )
+                                            .changed()
+                                        } else {
+                                            ui.add(
+                                                egui::TextEdit::singleline(val)
+                                                    .desired_width(240.0),
+                                            )
+                                            .changed()
+                                        };
+                                        if changed {
+                                            tp_changed = true;
+                                        }
+                                        ui.end_row();
+                                    };
+                                row("tp-title", &mut tp.title, false);
+                                row("tp-credit", &mut tp.credit, false);
+                                row("tp-author", &mut tp.author, false);
+                                row("tp-source", &mut tp.source, false);
+                                row("tp-draft-date", &mut tp.draft_date, false);
+                                row("tp-contact", &mut tp.contact, true);
+                                row("tp-copyright", &mut tp.copyright, false);
+                            });
                     });
+
+                    ui.add_space(12.0);
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new(self.i18n.t("tp-preview-heading"))
+                                .small()
+                                .weak(),
+                        );
+                        ui.add_space(4.0);
+                        let tp = &self.doc.title_page;
+                        egui::Frame::new()
+                            .fill(palette.paper_bg)
+                            .stroke(egui::Stroke::new(1.0_f32, palette.paper_border))
+                            .corner_radius(egui::CornerRadius::same(4))
+                            .inner_margin(egui::Margin::same(16))
+                            .show(ui, |ui| {
+                                ui.set_width(250.0);
+                                ui.set_min_height(320.0);
+                                ui.vertical_centered(|ui| {
+                                    ui.add_space(56.0);
+                                    if !tp.title.trim().is_empty() {
+                                        ui.label(
+                                            egui::RichText::new(tp.title.trim())
+                                                .monospace()
+                                                .strong()
+                                                .size(14.0)
+                                                .color(palette.paper_ink),
+                                        );
+                                        ui.add_space(10.0);
+                                    }
+                                    let credit = if tp.credit.trim().is_empty()
+                                        && !tp.author.trim().is_empty()
+                                    {
+                                        self.doc.settings.dictionary.label_written_by.as_str()
+                                    } else {
+                                        tp.credit.trim()
+                                    };
+                                    if !credit.is_empty() {
+                                        ui.label(
+                                            egui::RichText::new(credit)
+                                                .monospace()
+                                                .size(11.0)
+                                                .color(palette.paper_ink),
+                                        );
+                                        ui.add_space(6.0);
+                                    }
+                                    if !tp.author.trim().is_empty() {
+                                        ui.label(
+                                            egui::RichText::new(tp.author.trim())
+                                                .monospace()
+                                                .size(11.5)
+                                                .color(palette.paper_ink),
+                                        );
+                                        ui.add_space(8.0);
+                                    }
+                                    if !tp.source.trim().is_empty() {
+                                        ui.label(
+                                            egui::RichText::new(tp.source.trim())
+                                                .monospace()
+                                                .italics()
+                                                .size(10.5)
+                                                .color(palette.muted_text),
+                                        );
+                                    }
+                                });
+                                ui.add_space(80.0);
+                                ui.horizontal(|ui| {
+                                    ui.vertical(|ui| {
+                                        if !tp.contact.trim().is_empty() {
+                                            ui.label(
+                                                egui::RichText::new(tp.contact.trim())
+                                                    .monospace()
+                                                    .size(9.5)
+                                                    .color(palette.paper_ink),
+                                            );
+                                        }
+                                        if !tp.copyright.trim().is_empty() {
+                                            ui.label(
+                                                egui::RichText::new(tp.copyright.trim())
+                                                    .monospace()
+                                                    .size(9.5)
+                                                    .color(palette.muted_text),
+                                            );
+                                        }
+                                    });
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::BOTTOM),
+                                        |ui| {
+                                            if !tp.draft_date.trim().is_empty() {
+                                                ui.label(
+                                                    egui::RichText::new(tp.draft_date.trim())
+                                                        .monospace()
+                                                        .size(9.5)
+                                                        .color(palette.paper_ink),
+                                                );
+                                            }
+                                        },
+                                    );
+                                });
+                            });
+                    });
+                });
                 if tp_changed {
                     self.mark_dirty();
                 }
@@ -1449,6 +1889,381 @@ impl DramApp {
             self.pending_recovery_path = None;
         }
     }
+
+    fn show_beat_board(&mut self, ui: &mut egui::Ui) {
+        self.ensure_pagination();
+
+        // Collect scenes: (start_idx, end_idx, heading, synopsis_idx, synopsis_text, page_num)
+        struct CardInfo {
+            start: usize,
+            end: usize,
+            heading: String,
+            synopsis_idx: Option<usize>,
+            synopsis: String,
+            page_num: usize,
+        }
+
+        let mut cards: Vec<CardInfo> = Vec::new();
+        for (idx, el) in self.doc.elements.iter().enumerate() {
+            if el.kind == ElementType::SceneHeading {
+                if let Some(prev) = cards.last_mut() {
+                    prev.end = idx;
+                }
+                let num = el
+                    .scene_number
+                    .as_ref()
+                    .map(|n| format!("{}. ", n.value))
+                    .unwrap_or_default();
+                let heading = el.plain_text();
+                let label = if heading.trim().is_empty() {
+                    format!("{num}...")
+                } else {
+                    format!("{num}{heading}")
+                };
+                let page_num = element_page_number(&self.cached_pagination, idx);
+                cards.push(CardInfo {
+                    start: idx,
+                    end: self.doc.elements.len(),
+                    heading: label,
+                    synopsis_idx: None,
+                    synopsis: String::new(),
+                    page_num,
+                });
+            } else if el.kind == ElementType::Synopsis {
+                if let Some(cur) = cards.last_mut() {
+                    if cur.synopsis_idx.is_none() {
+                        cur.synopsis_idx = Some(idx);
+                        cur.synopsis = el.plain_text();
+                    }
+                }
+            }
+        }
+
+        let mut move_req: Option<(usize, usize)> = None;
+        let mut jump_to: Option<usize> = None;
+        let mut synopsis_update: Option<(usize, Option<usize>, String)> = None;
+        let total_pages = self.cached_pagination.page_count();
+        let palette = theme::paper_palette(self.dark_theme);
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_space(16.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(20.0);
+                    ui.heading(self.i18n.t("beat-board-title"));
+                });
+                ui.add_space(12.0);
+
+                if cards.is_empty() {
+                    ui.horizontal(|ui| {
+                        ui.add_space(20.0);
+                        ui.label(egui::RichText::new(self.i18n.t("beat-board-empty")).weak());
+                    });
+                    return;
+                }
+
+                let avail_w = (ui.available_width() - 40.0).max(280.0);
+                let card_w = 280.0_f32;
+                let cols = ((avail_w / (card_w + 14.0)).floor() as usize).max(1);
+                let total_cards = cards.len();
+
+                ui.horizontal(|ui| {
+                    ui.add_space(20.0);
+                    egui::Grid::new("beat_board_grid")
+                        .num_columns(cols)
+                        .spacing([14.0, 14.0])
+                        .show(ui, |ui| {
+                            for (c_i, card) in cards.iter_mut().enumerate() {
+                                let is_active = self.editor.focused_index >= card.start
+                                    && self.editor.focused_index < card.end;
+                                let border = if is_active {
+                                    egui::Stroke::new(1.5_f32, theme::ACCENT_CRIMSON)
+                                } else {
+                                    egui::Stroke::new(1.0_f32, palette.paper_border)
+                                };
+
+                                egui::Frame::new()
+                                    .fill(palette.paper_bg)
+                                    .stroke(border)
+                                    .corner_radius(egui::CornerRadius::same(6))
+                                    .inner_margin(egui::Margin::same(12))
+                                    .show(ui, |ui| {
+                                        ui.set_width(card_w - 24.0);
+                                        ui.set_min_height(150.0);
+
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                egui::RichText::new(&card.heading)
+                                                    .strong()
+                                                    .color(palette.paper_ink),
+                                            );
+                                        });
+
+                                        let mut page_args = FluentArgs::new();
+                                        page_args.set("current", card.page_num);
+                                        page_args.set("total", total_pages);
+                                        ui.label(
+                                            egui::RichText::new(
+                                                self.i18n.t_args("page-x-of-y", &page_args),
+                                            )
+                                            .small()
+                                            .color(palette.muted_text),
+                                        );
+                                        ui.add_space(6.0);
+
+                                        let resp = ui.add(
+                                            egui::TextEdit::multiline(&mut card.synopsis)
+                                                .hint_text(
+                                                    self.i18n.t("beat-board-synopsis-placeholder"),
+                                                )
+                                                .desired_rows(3)
+                                                .desired_width(card_w - 30.0)
+                                                .text_color(palette.paper_ink),
+                                        );
+                                        if resp.changed() {
+                                            synopsis_update = Some((
+                                                card.start,
+                                                card.synopsis_idx,
+                                                card.synopsis.clone(),
+                                            ));
+                                        }
+
+                                        ui.add_space(8.0);
+                                        ui.horizontal(|ui| {
+                                            if ui
+                                                .small_button(self.i18n.t("beat-board-open"))
+                                                .clicked()
+                                            {
+                                                jump_to = Some(card.start);
+                                            }
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    if c_i + 1 < total_cards
+                                                        && ui
+                                                            .small_button(">")
+                                                            .on_hover_text(
+                                                                self.i18n.t("beat-board-move-next"),
+                                                            )
+                                                            .clicked()
+                                                    {
+                                                        move_req = Some((c_i, c_i + 1));
+                                                    }
+                                                    if c_i > 0
+                                                        && ui
+                                                            .small_button("<")
+                                                            .on_hover_text(
+                                                                self.i18n.t("beat-board-move-prev"),
+                                                            )
+                                                            .clicked()
+                                                    {
+                                                        move_req = Some((c_i, c_i - 1));
+                                                    }
+                                                },
+                                            );
+                                        });
+                                    });
+
+                                if (c_i + 1) % cols == 0 {
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                });
+                ui.add_space(24.0);
+            });
+
+        if let Some((scene_start, syn_idx, new_text)) = synopsis_update {
+            if let Some(idx) = syn_idx {
+                let old_runs = self.doc.elements[idx].runs.clone();
+                let new_runs = if new_text.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![TextRun::plain(new_text)]
+                };
+                if self
+                    .undo
+                    .execute(
+                        &mut self.doc,
+                        EditCommand::UpdateRuns {
+                            index: idx,
+                            old_runs,
+                            new_runs,
+                        },
+                    )
+                    .is_ok()
+                {
+                    self.mark_dirty();
+                }
+            } else if !new_text.is_empty() {
+                let insert_idx = (scene_start + 1).min(self.doc.elements.len());
+                if self
+                    .undo
+                    .execute(
+                        &mut self.doc,
+                        EditCommand::InsertElement {
+                            index: insert_idx,
+                            element: Element::new(ElementType::Synopsis, new_text),
+                        },
+                    )
+                    .is_ok()
+                {
+                    self.mark_dirty();
+                }
+            }
+        }
+
+        if let Some((from_s, to_s)) = move_req {
+            let simple_scenes: Vec<(usize, usize, String)> = cards
+                .into_iter()
+                .map(|c| (c.start, c.end, c.heading))
+                .collect();
+            self.swap_scenes(&simple_scenes, from_s, to_s);
+        }
+
+        if let Some(target_idx) = jump_to {
+            self.editor.focused_index = target_idx;
+            self.editor.pending_focus = Some(target_idx);
+            self.view_mode = ViewMode::Editor;
+        }
+    }
+
+    fn show_reports_window(&mut self, ctx: &egui::Context) {
+        if !self.show_reports_dialog {
+            return;
+        }
+        let breakdown = generate_breakdown(&self.doc);
+        let mut open = self.show_reports_dialog;
+
+        egui::Window::new(self.i18n.t("reports-title"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(540.0)
+            .default_height(420.0)
+            .show(ctx, |ui| {
+                let mut sum_args = FluentArgs::new();
+                sum_args.set("scenes", breakdown.total_scenes);
+                sum_args.set("int", breakdown.interior_scenes);
+                sum_args.set("ext", breakdown.exterior_scenes);
+                sum_args.set("day", breakdown.day_scenes);
+                sum_args.set("night", breakdown.night_scenes);
+                ui.label(
+                    egui::RichText::new(self.i18n.t_args("reports-summary", &sum_args)).strong(),
+                );
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    if ui
+                        .selectable_label(
+                            self.report_tab == ReportTab::Characters,
+                            self.i18n.t("reports-tab-characters"),
+                        )
+                        .clicked()
+                    {
+                        self.report_tab = ReportTab::Characters;
+                    }
+                    if ui
+                        .selectable_label(
+                            self.report_tab == ReportTab::Locations,
+                            self.i18n.t("reports-tab-locations"),
+                        )
+                        .clicked()
+                    {
+                        self.report_tab = ReportTab::Locations;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(self.i18n.t("reports-export-csv")).clicked() {
+                            if let Some(mut path) = rfd::FileDialog::new()
+                                .add_filter("CSV", &["csv"])
+                                .set_file_name("senaryo_rapor.csv")
+                                .save_file()
+                            {
+                                if path.extension().is_none() {
+                                    path.set_extension("csv");
+                                }
+                                let csv = breakdown_to_csv(&breakdown);
+                                match fs::write(&path, csv) {
+                                    Ok(()) => {
+                                        self.report_status = Some(self.i18n.t("reports-exported"));
+                                    }
+                                    Err(err) => {
+                                        let mut args = FluentArgs::new();
+                                        args.set("reason", err.to_string());
+                                        self.report_status =
+                                            Some(self.i18n.t_args("error-save-failed", &args));
+                                    }
+                                }
+                            }
+                        }
+                    });
+                });
+
+                if let Some(status) = &self.report_status {
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(status).small().weak());
+                }
+
+                ui.separator();
+
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match self.report_tab {
+                        ReportTab::Characters => {
+                            egui::Grid::new("reports_char_grid")
+                                .num_columns(4)
+                                .striped(true)
+                                .spacing([18.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.strong(self.i18n.t("reports-col-name"));
+                                    ui.strong(self.i18n.t("reports-col-scenes"));
+                                    ui.strong(self.i18n.t("reports-col-lines"));
+                                    ui.strong(self.i18n.t("reports-col-words"));
+                                    ui.end_row();
+                                    for ch in &breakdown.characters {
+                                        ui.label(&ch.name);
+                                        ui.label(ch.scene_count.to_string());
+                                        ui.label(ch.dialogue_blocks.to_string());
+                                        ui.label(ch.word_count.to_string());
+                                        ui.end_row();
+                                    }
+                                });
+                        }
+                        ReportTab::Locations => {
+                            egui::Grid::new("reports_loc_grid")
+                                .num_columns(4)
+                                .striped(true)
+                                .spacing([18.0, 6.0])
+                                .show(ui, |ui| {
+                                    ui.strong(self.i18n.t("reports-col-location"));
+                                    ui.strong(self.i18n.t("reports-col-scenes"));
+                                    ui.strong(self.i18n.t("reports-col-int-ext"));
+                                    ui.strong(self.i18n.t("reports-col-day-night"));
+                                    ui.end_row();
+                                    for loc in &breakdown.locations {
+                                        ui.label(&loc.location);
+                                        ui.label(loc.scene_count.to_string());
+                                        ui.label(format!(
+                                            "{} / {}",
+                                            loc.interior_count, loc.exterior_count
+                                        ));
+                                        ui.label(format!(
+                                            "{} / {}",
+                                            loc.day_count, loc.night_count
+                                        ));
+                                        ui.end_row();
+                                    }
+                                });
+                        }
+                    });
+            });
+
+        if !open {
+            self.show_reports_dialog = false;
+            self.report_status = None;
+        }
+    }
 }
 
 impl eframe::App for DramApp {
@@ -1489,9 +2304,61 @@ impl eframe::App for DramApp {
                                 self.new_document();
                                 ui.close_menu();
                             }
+                            ui.menu_button(self.i18n.t("menu-new-template"), |ui| {
+                                if ui.button(self.i18n.t("template-feature")).clicked() {
+                                    self.new_from_template(ProjectTemplate::FeatureFilm);
+                                    ui.close_menu();
+                                }
+                                if ui.button(self.i18n.t("template-short")).clicked() {
+                                    self.new_from_template(ProjectTemplate::ShortFilm);
+                                    ui.close_menu();
+                                }
+                                if ui.button(self.i18n.t("template-series")).clicked() {
+                                    self.new_from_template(ProjectTemplate::TvEpisode);
+                                    ui.close_menu();
+                                }
+                            });
                             if ui.button(self.i18n.t("menu-open")).clicked() {
                                 self.open_dram();
                                 ui.close_menu();
+                            }
+                            let recent_snapshot = self.recent_files.clone();
+                            let mut open_recent: Option<PathBuf> = None;
+                            let mut clear_recent = false;
+                            ui.menu_button(self.i18n.t("menu-recent-files"), |ui| {
+                                if recent_snapshot.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new(self.i18n.t("menu-recent-empty"))
+                                            .weak(),
+                                    );
+                                } else {
+                                    for p in &recent_snapshot {
+                                        let label = p
+                                            .file_name()
+                                            .and_then(|n| n.to_str())
+                                            .unwrap_or_default()
+                                            .to_string();
+                                        if ui
+                                            .button(label)
+                                            .on_hover_text(p.display().to_string())
+                                            .clicked()
+                                        {
+                                            open_recent = Some(p.clone());
+                                            ui.close_menu();
+                                        }
+                                    }
+                                    ui.separator();
+                                    if ui.button(self.i18n.t("menu-recent-clear")).clicked() {
+                                        clear_recent = true;
+                                        ui.close_menu();
+                                    }
+                                }
+                            });
+                            if let Some(p) = open_recent {
+                                self.open_path(&p);
+                            }
+                            if clear_recent {
+                                self.clear_recent_files();
                             }
                             if ui.button(self.i18n.t("menu-save")).clicked() {
                                 self.save_current();
@@ -1571,6 +2438,27 @@ impl eframe::App for DramApp {
 
                         ui.menu_button(self.i18n.t("menu-view"), |ui| {
                             if ui
+                                .selectable_label(
+                                    self.view_mode == ViewMode::Editor,
+                                    self.i18n.t("view-editor"),
+                                )
+                                .clicked()
+                            {
+                                self.view_mode = ViewMode::Editor;
+                                ui.close_menu();
+                            }
+                            if ui
+                                .selectable_label(
+                                    self.view_mode == ViewMode::BeatBoard,
+                                    self.i18n.t("view-beat-board"),
+                                )
+                                .clicked()
+                            {
+                                self.view_mode = ViewMode::BeatBoard;
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            if ui
                                 .checkbox(&mut self.show_navigator, self.i18n.t("nav-toggle"))
                                 .changed()
                             {
@@ -1578,6 +2466,15 @@ impl eframe::App for DramApp {
                             }
                             if ui
                                 .checkbox(&mut self.focus_mode, self.i18n.t("focus-mode-toggle"))
+                                .changed()
+                            {
+                                ui.close_menu();
+                            }
+                            if ui
+                                .checkbox(
+                                    &mut self.spellcheck_enabled,
+                                    self.i18n.t("spellcheck-toggle"),
+                                )
                                 .changed()
                             {
                                 ui.close_menu();
@@ -1631,6 +2528,19 @@ impl eframe::App for DramApp {
                             ui.separator();
                             if ui.button(self.i18n.t("dual-dialogue-btn")).clicked() {
                                 self.toggle_dual_dialogue();
+                                ui.close_menu();
+                            }
+                            ui.checkbox(&mut self.revision_mode, self.i18n.t("rev-mode-toggle"));
+                            if ui.button(self.i18n.t("rev-clear-all")).clicked() {
+                                for el in &mut self.doc.elements {
+                                    el.revision = None;
+                                }
+                                self.mark_dirty();
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            if ui.button(self.i18n.t("menu-reports")).clicked() {
+                                self.show_reports_dialog = true;
                                 ui.close_menu();
                             }
                         });
@@ -1743,131 +2653,169 @@ impl eframe::App for DramApp {
                     ui.separator();
 
                     // Element type selector toolbar
-                    ui.horizontal(|ui| {
-                        ui.label(self.i18n.t("toolbar-element-type"));
-                        let current_kind = self
-                            .doc
-                            .elements
-                            .get(self.editor.focused_index)
-                            .map_or(ElementType::Action, |e| e.kind);
+                    ui.add_space(1.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), 28.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.label(self.i18n.t("toolbar-element-type"));
+                            let current_kind = self
+                                .doc
+                                .elements
+                                .get(self.editor.focused_index)
+                                .map_or(ElementType::Action, |e| e.kind);
 
-                        egui::ComboBox::from_id_salt("element_type_combo")
-                            .selected_text(self.i18n.t(element_type_i18n_key(current_kind)))
-                            .show_ui(ui, |ui| {
-                                for &kind in &ELEMENT_TYPES {
-                                    let label = self.i18n.t(element_type_i18n_key(kind));
-                                    if ui.selectable_label(current_kind == kind, label).clicked()
-                                        && current_kind != kind
-                                        && self
-                                            .undo
-                                            .execute(
-                                                &mut self.doc,
-                                                EditCommand::ChangeElementType {
-                                                    index: self.editor.focused_index,
-                                                    old_kind: current_kind,
-                                                    new_kind: kind,
-                                                },
-                                            )
-                                            .is_ok()
-                                    {
-                                        self.mark_dirty();
-                                    }
-                                }
-                            });
-
-                        ui.separator();
-                        if ui.button(self.i18n.t("dual-dialogue-btn")).clicked() {
-                            self.toggle_dual_dialogue();
-                        }
-
-                        ui.separator();
-                        ui.label(self.i18n.t("revision-label"));
-                        let cur_rev = self
-                            .doc
-                            .elements
-                            .get(self.editor.focused_index)
-                            .and_then(|e| e.revision.as_ref().map(|r| r.color.clone()));
-                        let rev_label = match cur_rev.as_deref() {
-                            Some("blue") => self.i18n.t("rev-blue"),
-                            Some("pink") => self.i18n.t("rev-pink"),
-                            Some("yellow") => self.i18n.t("rev-yellow"),
-                            Some("green") => self.i18n.t("rev-green"),
-                            _ => self.i18n.t("rev-none"),
-                        };
-                        egui::ComboBox::from_id_salt("revision_combo")
-                            .selected_text(rev_label)
-                            .show_ui(ui, |ui| {
-                                let options = [
-                                    (None, "rev-none"),
-                                    (Some("blue"), "rev-blue"),
-                                    (Some("pink"), "rev-pink"),
-                                    (Some("yellow"), "rev-yellow"),
-                                    (Some("green"), "rev-green"),
-                                ];
-                                for (val, key) in options {
-                                    let is_sel = cur_rev.as_deref() == val;
-                                    if ui.selectable_label(is_sel, self.i18n.t(key)).clicked() {
-                                        if let Some(el) =
-                                            self.doc.elements.get_mut(self.editor.focused_index)
+                            egui::ComboBox::from_id_salt("element_type_combo")
+                                .selected_text(self.i18n.t(element_type_i18n_key(current_kind)))
+                                .show_ui(ui, |ui| {
+                                    for &kind in &ELEMENT_TYPES {
+                                        let label = self.i18n.t(element_type_i18n_key(kind));
+                                        if ui
+                                            .selectable_label(current_kind == kind, label)
+                                            .clicked()
+                                            && current_kind != kind
+                                            && self
+                                                .undo
+                                                .execute(
+                                                    &mut self.doc,
+                                                    EditCommand::ChangeElementType {
+                                                        index: self.editor.focused_index,
+                                                        old_kind: current_kind,
+                                                        new_kind: kind,
+                                                    },
+                                                )
+                                                .is_ok()
                                         {
-                                            el.revision = val.map(|c| RevisionMark {
-                                                color: c.to_string(),
-                                                label: String::new(),
-                                            });
                                             self.mark_dirty();
                                         }
                                     }
-                                }
-                            });
+                                });
 
-                        ui.separator();
-                        let toggle_btn = |ui: &mut egui::Ui, active: bool, label: String| -> bool {
-                            let mut btn = egui::Button::new(label);
-                            if active {
-                                btn = btn.fill(ui.visuals().widgets.hovered.bg_fill);
+                            ui.separator();
+                            if ui.button(self.i18n.t("dual-dialogue-btn")).clicked() {
+                                self.toggle_dual_dialogue();
                             }
-                            ui.add(btn).clicked()
-                        };
-                        if toggle_btn(ui, self.show_navigator, self.i18n.t("nav-toggle")) {
-                            self.show_navigator = !self.show_navigator;
-                        }
-                        if toggle_btn(
-                            ui,
-                            self.show_navigator && self.inspector_tab == InspectorTab::Notes,
-                            self.i18n.t("notes-toggle"),
-                        ) {
-                            self.show_navigator = true;
-                            self.inspector_tab = InspectorTab::Notes;
-                        }
-                        if toggle_btn(ui, self.focus_mode, self.i18n.t("focus-mode-toggle")) {
-                            self.focus_mode = !self.focus_mode;
-                        }
 
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let doc_name = self
-                                .current_path
-                                .as_ref()
-                                .and_then(|p| p.file_name())
-                                .and_then(|n| n.to_str())
-                                .map(ToString::to_string)
-                                .unwrap_or_else(|| self.i18n.t("untitled-document"));
-                            let tab_label = if self.dirty {
-                                format!("{doc_name} *")
-                            } else {
-                                doc_name
+                            ui.separator();
+                            ui.label(self.i18n.t("revision-label"));
+                            let cur_rev = self
+                                .doc
+                                .elements
+                                .get(self.editor.focused_index)
+                                .and_then(|e| e.revision.as_ref().map(|r| r.color.clone()));
+                            let rev_label = match cur_rev.as_deref() {
+                                Some("blue") => self.i18n.t("rev-blue"),
+                                Some("pink") => self.i18n.t("rev-pink"),
+                                Some("yellow") => self.i18n.t("rev-yellow"),
+                                Some("green") => self.i18n.t("rev-green"),
+                                _ => self.i18n.t("rev-none"),
                             };
-                            ui.label(egui::RichText::new(tab_label).small().weak());
-                        });
-                    });
+                            egui::ComboBox::from_id_salt("revision_combo")
+                                .selected_text(rev_label)
+                                .show_ui(ui, |ui| {
+                                    let options = [
+                                        (None, "rev-none"),
+                                        (Some("blue"), "rev-blue"),
+                                        (Some("pink"), "rev-pink"),
+                                        (Some("yellow"), "rev-yellow"),
+                                        (Some("green"), "rev-green"),
+                                    ];
+                                    for (val, key) in options {
+                                        let is_sel = cur_rev.as_deref() == val;
+                                        if ui.selectable_label(is_sel, self.i18n.t(key)).clicked() {
+                                            if let Some(c) = val {
+                                                self.active_revision_color = c.to_string();
+                                            }
+                                            if let Some(el) =
+                                                self.doc.elements.get_mut(self.editor.focused_index)
+                                            {
+                                                el.revision = val.map(|c| RevisionMark {
+                                                    color: c.to_string(),
+                                                    label: String::new(),
+                                                });
+                                                self.mark_dirty();
+                                            }
+                                        }
+                                    }
+                                });
+
+                            let rev_btn_label = if self.revision_mode {
+                                self.i18n.t("rev-mode-active")
+                            } else {
+                                self.i18n.t("rev-mode-toggle")
+                            };
+                            let mut rev_btn = egui::Button::new(rev_btn_label);
+                            if self.revision_mode {
+                                rev_btn = rev_btn.fill(theme::ACCENT_CRIMSON);
+                            }
+                            if ui.add(rev_btn).clicked() {
+                                self.revision_mode = !self.revision_mode;
+                            }
+
+                            ui.separator();
+                            let toggle_btn =
+                                |ui: &mut egui::Ui, active: bool, label: String| -> bool {
+                                    let mut btn = egui::Button::new(label);
+                                    if active {
+                                        btn = btn.fill(ui.visuals().widgets.hovered.bg_fill);
+                                    }
+                                    ui.add(btn).clicked()
+                                };
+                            if toggle_btn(
+                                ui,
+                                self.view_mode == ViewMode::BeatBoard,
+                                self.i18n.t("view-beat-board"),
+                            ) {
+                                self.view_mode = match self.view_mode {
+                                    ViewMode::Editor => ViewMode::BeatBoard,
+                                    ViewMode::BeatBoard => ViewMode::Editor,
+                                };
+                            }
+                            if toggle_btn(ui, self.show_navigator, self.i18n.t("nav-toggle")) {
+                                self.show_navigator = !self.show_navigator;
+                            }
+                            if toggle_btn(
+                                ui,
+                                self.show_navigator && self.inspector_tab == InspectorTab::Notes,
+                                self.i18n.t("notes-toggle"),
+                            ) {
+                                self.show_navigator = true;
+                                self.inspector_tab = InspectorTab::Notes;
+                            }
+                            if toggle_btn(ui, self.focus_mode, self.i18n.t("focus-mode-toggle")) {
+                                self.focus_mode = !self.focus_mode;
+                            }
+
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let doc_name = self
+                                        .current_path
+                                        .as_ref()
+                                        .and_then(|p| p.file_name())
+                                        .and_then(|n| n.to_str())
+                                        .map(ToString::to_string)
+                                        .unwrap_or_else(|| self.i18n.t("untitled-document"));
+                                    let tab_label = if self.dirty {
+                                        format!("{doc_name} *")
+                                    } else {
+                                        doc_name
+                                    };
+                                    ui.label(egui::RichText::new(tab_label).size(12.5).weak());
+                                },
+                            );
+                        },
+                    );
+                    ui.add_space(1.0);
                 });
 
             // Bottom status bar
             let status_frame = egui::Frame::side_top_panel(&ctx.style())
-                .inner_margin(egui::Margin::symmetric(12, 5));
+                .inner_margin(egui::Margin::symmetric(12, 6));
             egui::TopBottomPanel::bottom("status_bar")
                 .frame(status_frame)
                 .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_centered(|ui| {
                         let scene_count = self
                             .doc
                             .elements
@@ -1920,25 +2868,48 @@ impl eframe::App for DramApp {
             self.show_right_dock(ctx);
         }
 
-        // Main screenplay editor canvas
+        // Main screenplay editor canvas or Index Cards (Beat Board)
+        self.ensure_pagination();
+        let active_revision = self.revision_mode.then(|| RevisionMark {
+            color: self.active_revision_color.clone(),
+            label: String::new(),
+        });
+        let mut added_dict_word: Option<String> = None;
         let desk_bg = theme::paper_palette(self.dark_theme).desk_bg;
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(desk_bg))
-            .show(ctx, |ui| {
-                if self.editor.show(
-                    ui,
-                    &mut self.doc,
-                    &mut self.undo,
-                    &self.i18n,
-                    self.dark_theme,
-                ) {
-                    self.mark_dirty();
+            .show(ctx, |ui| match self.view_mode {
+                ViewMode::Editor => {
+                    let spell = self.spellcheck_enabled.then_some(&self.spellchecker);
+                    if self.editor.show(
+                        ui,
+                        &mut self.doc,
+                        &mut self.undo,
+                        &self.cached_pagination,
+                        active_revision.as_ref(),
+                        spell,
+                        &mut added_dict_word,
+                        &self.i18n,
+                        self.dark_theme,
+                    ) {
+                        self.mark_dirty();
+                    }
+                }
+                ViewMode::BeatBoard => {
+                    self.show_beat_board(ui);
                 }
             });
+
+        if let Some(word) = added_dict_word {
+            self.spellchecker.add_to_user_dict(&word);
+            save_user_dict(&self.spellchecker.user_words_sorted());
+        }
 
         self.show_title_page_window(ctx);
         self.show_find_replace_window(ctx);
         self.show_print_window(ctx);
+        self.show_reports_window(ctx);
+        self.show_asset_preview_window(ctx);
         self.show_shortcuts_window(ctx);
         self.show_about_window(ctx);
         self.show_unsaved_close_window(ctx);
@@ -1982,6 +2953,83 @@ fn element_page_number(paged: &dram_core::PaginatedDocument, element_idx: usize)
         }
     }
     1
+}
+
+fn recent_files_store_path() -> Option<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(xdg).join("dram").join("recent.txt"));
+    }
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        return Some(PathBuf::from(appdata).join("dram").join("recent.txt"));
+    }
+    std::env::var_os("HOME").map(|h| {
+        PathBuf::from(h)
+            .join(".config")
+            .join("dram")
+            .join("recent.txt")
+    })
+}
+
+fn load_recent_files() -> Vec<PathBuf> {
+    let Some(store) = recent_files_store_path() else {
+        return Vec::new();
+    };
+    let Ok(raw) = fs::read_to_string(store) else {
+        return Vec::new();
+    };
+    raw.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(PathBuf::from)
+        .take(8)
+        .collect()
+}
+
+fn save_recent_files(paths: &[PathBuf]) {
+    let Some(store) = recent_files_store_path() else {
+        return;
+    };
+    if let Some(parent) = store.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let content = paths
+        .iter()
+        .filter_map(|p| p.to_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let _ = fs::write(store, content);
+}
+
+fn user_dict_store_path() -> Option<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(xdg).join("dram").join("user_dict.txt"));
+    }
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        return Some(PathBuf::from(appdata).join("dram").join("user_dict.txt"));
+    }
+    std::env::var_os("HOME").map(|h| {
+        PathBuf::from(h)
+            .join(".config")
+            .join("dram")
+            .join("user_dict.txt")
+    })
+}
+
+fn load_user_dict() -> String {
+    let Some(store) = user_dict_store_path() else {
+        return String::new();
+    };
+    fs::read_to_string(store).unwrap_or_default()
+}
+
+fn save_user_dict(words: &[String]) {
+    let Some(store) = user_dict_store_path() else {
+        return;
+    };
+    if let Some(parent) = store.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(store, words.join("\n"));
 }
 
 #[cfg(test)]
