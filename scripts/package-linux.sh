@@ -44,10 +44,11 @@ cat > "${DEB_STAGE}/usr/share/applications/dram.desktop" <<'DESKTOP'
 [Desktop Entry]
 Name=draM.
 Comment=Screenplay writing application
-Exec=dram
+Exec=dram %f
 Icon=dram
 Terminal=false
 Type=Application
+MimeType=application/x-dram;
 Categories=Office;WordProcessor;
 DESKTOP
 

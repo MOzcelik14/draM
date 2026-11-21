@@ -188,6 +188,14 @@ impl DramApp {
         if let Some(path) = initial_file {
             app.open_path(&path);
         }
+        if let Ok(view) = std::env::var("DRAM_INITIAL_VIEW") {
+            match view.as_str() {
+                "beat-board" => app.view_mode = ViewMode::BeatBoard,
+                "title-page" => app.show_title_page_editor = true,
+                "reports" => app.show_reports_dialog = true,
+                _ => {}
+            }
+        }
         app
     }
 
@@ -1989,79 +1997,88 @@ impl DramApp {
                                     .corner_radius(egui::CornerRadius::same(6))
                                     .inner_margin(egui::Margin::same(12))
                                     .show(ui, |ui| {
-                                        ui.set_width(card_w - 24.0);
-                                        ui.set_min_height(150.0);
+                                        ui.vertical(|ui| {
+                                            ui.set_width(card_w - 24.0);
+                                            ui.set_min_height(155.0);
 
-                                        ui.horizontal(|ui| {
                                             ui.label(
                                                 egui::RichText::new(&card.heading)
                                                     .strong()
+                                                    .size(13.0)
                                                     .color(palette.paper_ink),
                                             );
-                                        });
 
-                                        let mut page_args = FluentArgs::new();
-                                        page_args.set("current", card.page_num);
-                                        page_args.set("total", total_pages);
-                                        ui.label(
-                                            egui::RichText::new(
-                                                self.i18n.t_args("page-x-of-y", &page_args),
-                                            )
-                                            .small()
-                                            .color(palette.muted_text),
-                                        );
-                                        ui.add_space(6.0);
-
-                                        let resp = ui.add(
-                                            egui::TextEdit::multiline(&mut card.synopsis)
-                                                .hint_text(
-                                                    self.i18n.t("beat-board-synopsis-placeholder"),
+                                            let mut page_args = FluentArgs::new();
+                                            page_args.set("current", card.page_num);
+                                            page_args.set("total", total_pages);
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    self.i18n.t_args("page-x-of-y", &page_args),
                                                 )
-                                                .desired_rows(3)
-                                                .desired_width(card_w - 30.0)
-                                                .text_color(palette.paper_ink),
-                                        );
-                                        if resp.changed() {
-                                            synopsis_update = Some((
-                                                card.start,
-                                                card.synopsis_idx,
-                                                card.synopsis.clone(),
-                                            ));
-                                        }
-
-                                        ui.add_space(8.0);
-                                        ui.horizontal(|ui| {
-                                            if ui
-                                                .small_button(self.i18n.t("beat-board-open"))
-                                                .clicked()
-                                            {
-                                                jump_to = Some(card.start);
-                                            }
-                                            ui.with_layout(
-                                                egui::Layout::right_to_left(egui::Align::Center),
-                                                |ui| {
-                                                    if c_i + 1 < total_cards
-                                                        && ui
-                                                            .small_button(">")
-                                                            .on_hover_text(
-                                                                self.i18n.t("beat-board-move-next"),
-                                                            )
-                                                            .clicked()
-                                                    {
-                                                        move_req = Some((c_i, c_i + 1));
-                                                    }
-                                                    if c_i > 0
-                                                        && ui
-                                                            .small_button("<")
-                                                            .on_hover_text(
-                                                                self.i18n.t("beat-board-move-prev"),
-                                                            )
-                                                            .clicked()
-                                                    {
-                                                        move_req = Some((c_i, c_i - 1));
-                                                    }
-                                                },
+                                                .size(11.5)
+                                                .color(palette.muted_text),
                                             );
+                                            ui.add_space(6.0);
+
+                                            let resp = ui.add(
+                                                egui::TextEdit::multiline(&mut card.synopsis)
+                                                    .hint_text(
+                                                        self.i18n
+                                                            .t("beat-board-synopsis-placeholder"),
+                                                    )
+                                                    .desired_rows(3)
+                                                    .desired_width(card_w - 28.0)
+                                                    .background_color(egui::Color32::from_rgb(
+                                                        244, 246, 249,
+                                                    ))
+                                                    .text_color(palette.paper_ink),
+                                            );
+                                            if resp.changed() {
+                                                synopsis_update = Some((
+                                                    card.start,
+                                                    card.synopsis_idx,
+                                                    card.synopsis.clone(),
+                                                ));
+                                            }
+
+                                            ui.add_space(8.0);
+                                            ui.horizontal(|ui| {
+                                                if ui
+                                                    .small_button(self.i18n.t("beat-board-open"))
+                                                    .clicked()
+                                                {
+                                                    jump_to = Some(card.start);
+                                                }
+                                                ui.with_layout(
+                                                    egui::Layout::right_to_left(
+                                                        egui::Align::Center,
+                                                    ),
+                                                    |ui| {
+                                                        if c_i + 1 < total_cards
+                                                            && ui
+                                                                .small_button(">")
+                                                                .on_hover_text(
+                                                                    self.i18n
+                                                                        .t("beat-board-move-next"),
+                                                                )
+                                                                .clicked()
+                                                        {
+                                                            move_req = Some((c_i, c_i + 1));
+                                                        }
+                                                        if c_i > 0
+                                                            && ui
+                                                                .small_button("<")
+                                                                .on_hover_text(
+                                                                    self.i18n
+                                                                        .t("beat-board-move-prev"),
+                                                                )
+                                                                .clicked()
+                                                        {
+                                                            move_req = Some((c_i, c_i - 1));
+                                                        }
+                                                    },
+                                                );
+                                            });
                                         });
                                     });
 
