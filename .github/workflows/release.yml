@@ -36,9 +36,9 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
   linux:
-    name: Package Linux (tar.gz + deb)
+    name: Package Linux (tar.gz + deb + rpm + AppImage)
     needs: meta
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux system dependencies
@@ -50,7 +50,13 @@ jobs:
             libx11-dev \
             libgl1-mesa-dev \
             libxkbcommon-dev \
-            libwayland-dev
+            libwayland-dev \
+            rpm \
+            libfuse2 \
+            file \
+            curl
+          curl -fsSL -o /tmp/appimagetool-x86_64.AppImage https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x /tmp/appimagetool-x86_64.AppImage
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build release binary
@@ -63,6 +69,8 @@ jobs:
           path: |
             dist/*.tar.gz
             dist/*.deb
+            dist/*.rpm
+            dist/*.AppImage
           if-no-files-found: error
           retention-days: 30
 
@@ -147,7 +155,7 @@ jobs:
       - name: Generate checksums
         run: |
           set -euo pipefail
-          (cd dist && sha256sum -- *.deb *.tar.gz *.zip > SHA256SUMS.txt)
+          (cd dist && sha256sum -- *.deb *.rpm *.AppImage *.tar.gz *.zip > SHA256SUMS.txt)
           cat dist/SHA256SUMS.txt
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
@@ -156,6 +164,8 @@ jobs:
           target_commitish: ${{ github.sha }}
           files: |
             dist/*.deb
+            dist/*.rpm
+            dist/*.AppImage
             dist/*.tar.gz
             dist/*.zip
             dist/SHA256SUMS.txt
