@@ -111,7 +111,7 @@ jobs:
           retention-days: 30
 
   macos:
-    name: Package macOS (tar.gz)
+    name: Package macOS (dmg + tar.gz)
     needs: meta
     runs-on: macos-latest
     steps:
@@ -120,10 +120,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build macOS release binary
         run: cargo build --release --locked -p dram-app
-      - name: Package macOS archive
+      - name: Package macOS dmg and tar.gz
         run: |
+          set -euo pipefail
           VER="${{ needs.meta.outputs.version }}"
           mkdir -p dist
+
           STAGE="$(mktemp -d)"
           PKG="${STAGE}/draM-${VER}-macos-$(uname -m)"
           mkdir -p "${PKG}/locales"
@@ -133,10 +135,39 @@ jobs:
           cp assets/logo-mark.svg "${PKG}/dram.svg"
           tar -C "${STAGE}" -czf "dist/draM-${VER}-macos-$(uname -m).tar.gz" "draM-${VER}-macos-$(uname -m)"
           rm -rf "${STAGE}"
+
+          DMG_STAGE="$(mktemp -d)"
+          APP_DIR="${DMG_STAGE}/draM..app"
+          mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Resources/locales"
+          cp target/release/dram "${APP_DIR}/Contents/MacOS/dram"
+          chmod +x "${APP_DIR}/Contents/MacOS/dram"
+          cp -r locales/* "${APP_DIR}/Contents/Resources/locales/"
+
+          cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key><string>dram</string>
+            <key>CFBundleIdentifier</key><string>com.mozcelik14.dram</string>
+            <key>CFBundleName</key><string>draM.</string>
+            <key>CFBundleVersion</key><string>${VER}</string>
+            <key>CFBundleShortVersionString</key><string>${VER}</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+
+          ln -s /Applications "${DMG_STAGE}/Applications"
+          hdiutil create -volname "draM. ${VER}" -srcfolder "${DMG_STAGE}" -ov -format UDZO "dist/draM-${VER}-macos-$(uname -m).dmg"
+          rm -rf "${DMG_STAGE}"
       - uses: actions/upload-artifact@v4
         with:
           name: dram-macos-package
-          path: dist/*.tar.gz
+          path: |
+            dist/*.dmg
+            dist/*.tar.gz
           if-no-files-found: error
           retention-days: 30
 
@@ -155,7 +186,7 @@ jobs:
       - name: Generate checksums
         run: |
           set -euo pipefail
-          (cd dist && sha256sum -- *.deb *.rpm *.AppImage *.tar.gz *.zip > SHA256SUMS.txt)
+          (cd dist && sha256sum -- *.deb *.rpm *.AppImage *.dmg *.tar.gz *.zip > SHA256SUMS.txt)
           cat dist/SHA256SUMS.txt
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
@@ -166,6 +197,7 @@ jobs:
             dist/*.deb
             dist/*.rpm
             dist/*.AppImage
+            dist/*.dmg
             dist/*.tar.gz
             dist/*.zip
             dist/SHA256SUMS.txt
