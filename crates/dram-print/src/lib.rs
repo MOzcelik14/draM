@@ -143,6 +143,19 @@ pub fn print_document(
     profile: &LayoutProfile,
     options: &PrintOptions,
 ) -> Result<PathBuf, PrintError> {
+    if let Some(range) = options
+        .page_range
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if let Err(message) = validate_page_range(range) {
+            return Err(PrintError::PrintCommand {
+                message,
+                pdf_path: PathBuf::new(),
+            });
+        }
+    }
     let pdf_path = render_temp_pdf(doc, profile)?;
     submit_pdf_to_os(&pdf_path, options).map_err(|message| PrintError::PrintCommand {
         message,
