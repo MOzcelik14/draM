@@ -14,9 +14,11 @@ use quick_xml::{Reader, Writer};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
+use crate::dram_archive::{read_bounded, write_atomic_bytes};
 use crate::error::FormatError;
 
 const DOCUMENT_XML_ENTRY: &str = "document.xml";
+const MAX_XML_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Loads a `.fadein` file from `path` into a [`Document`].
 pub fn load_fadein(path: &Path, script_language: ScriptLanguage) -> Result<Document, FormatError> {
@@ -30,22 +32,23 @@ pub fn read_fadein_from_reader<R: Read + Seek>(
     script_language: ScriptLanguage,
 ) -> Result<Document, FormatError> {
     let mut archive = ZipArchive::new(reader)?;
-    let mut entry = match archive.by_name(DOCUMENT_XML_ENTRY) {
+    let entry = match archive.by_name(DOCUMENT_XML_ENTRY) {
         Ok(f) => f,
         Err(zip::result::ZipError::FileNotFound) => {
             return Err(FormatError::MissingEntry(DOCUMENT_XML_ENTRY.to_string()));
         }
         Err(e) => return Err(FormatError::Zip(e)),
     };
-    let mut xml = String::new();
-    entry.read_to_string(&mut xml)?;
+    let raw = read_bounded(entry, DOCUMENT_XML_ENTRY, MAX_XML_BYTES)?;
+    let xml = String::from_utf8(raw).map_err(|e| FormatError::Xml(e.to_string()))?;
     parse_osf_xml(&xml, script_language)
 }
 
 /// Writes `doc` as a `.fadein` ZIP archive to `path`.
 pub fn save_fadein(path: &Path, doc: &Document) -> Result<(), FormatError> {
-    let file = File::create(path)?;
-    write_fadein_to_writer(file, doc)
+    let mut buf = Cursor::new(Vec::new());
+    write_fadein_to_writer(&mut buf, doc)?;
+    write_atomic_bytes(path, &buf.into_inner())
 }
 
 /// Writes `doc` as a `.fadein` ZIP archive into any `Write + Seek` sink.
@@ -137,9 +140,29 @@ pub fn parse_osf_xml(xml: &str, script_language: ScriptLanguage) -> Result<Docum
             }
             Ok(Event::Text(e)) => {
                 let text = e
-                    .unescape()
+                    .xml10_content()
                     .map_err(|err| FormatError::Xml(err.to_string()))?
                     .into_owned();
+                if in_text && !text.is_empty() {
+                    push_styled_run(&mut current_runs, text, current_style);
+                } else if in_titlepage && current_title_key.is_some() {
+                    current_title_val.push_str(&text);
+                }
+            }
+            Ok(Event::GeneralRef(e)) => {
+                let text = if let Some(ch) = e
+                    .resolve_char_ref()
+                    .map_err(|err| FormatError::Xml(err.to_string()))?
+                {
+                    ch.to_string()
+                } else {
+                    let name = e
+                        .decode()
+                        .map_err(|err| FormatError::Xml(err.to_string()))?;
+                    quick_xml::escape::resolve_predefined_entity(&name)
+                        .unwrap_or(&name)
+                        .to_string()
+                };
                 if in_text && !text.is_empty() {
                     push_styled_run(&mut current_runs, text, current_style);
                 } else if in_titlepage && current_title_key.is_some() {
@@ -306,7 +329,7 @@ fn attr_value(e: &BytesStart<'_>, keys: &[&str]) -> Option<String> {
             .iter()
             .any(|candidate| k.eq_ignore_ascii_case(candidate))
         {
-            if let Ok(v) = attr.unescape_value() {
+            if let Ok(v) = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0) {
                 return Some(v.into_owned());
             }
         }

@@ -8,7 +8,10 @@ mod theme;
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -22,7 +25,7 @@ use dram_core::{
 };
 use dram_format::{
     load_dram, load_fadein, load_fdx, parse_fountain, recovery_path_for, remove_recovery,
-    save_dram, save_fadein, save_fdx, serialize_fountain, write_recovery,
+    save_dram, save_fadein, save_fdx, serialize_fountain, write_atomic_bytes, write_recovery,
 };
 use dram_pdf::export_pdf_file;
 use dram_print::{
@@ -103,6 +106,7 @@ struct DramApp {
     report_tab: ReportTab,
     report_status: Option<String>,
     dark_theme: bool,
+    applied_dark_theme: Option<bool>,
     focus_mode: bool,
     show_find_replace: bool,
     find_query: String,
@@ -118,6 +122,7 @@ struct DramApp {
     cached_pagination: PaginatedDocument,
     pagination_dirty: bool,
     last_autosave: Instant,
+    autosave_in_flight: Arc<AtomicBool>,
     pending_recovery_path: Option<PathBuf>,
     recent_files: Vec<PathBuf>,
     spellcheck_enabled: bool,
@@ -163,6 +168,7 @@ impl DramApp {
             report_tab: ReportTab::Characters,
             report_status: None,
             dark_theme: true,
+            applied_dark_theme: None,
             focus_mode: false,
             show_find_replace: false,
             find_query: String::new(),
@@ -178,6 +184,7 @@ impl DramApp {
             cached_pagination,
             pagination_dirty: false,
             last_autosave: Instant::now(),
+            autosave_in_flight: Arc::new(AtomicBool::new(false)),
             pending_recovery_path,
             recent_files,
             spellcheck_enabled: true,
@@ -257,7 +264,7 @@ impl DramApp {
             .and_then(|e| e.to_str())
             .map(|e| e.to_ascii_lowercase());
         match ext.as_deref() {
-            Some("fountain") | Some("txt") => match fs::read_to_string(path) {
+            Some("fountain") | Some("txt") => match read_text_bounded(path, MAX_TEXT_BYTES) {
                 Ok(content) => {
                     self.doc = parse_fountain(&content, self.doc.settings.script_language);
                     self.undo.clear();
@@ -384,7 +391,7 @@ impl DramApp {
         else {
             return;
         };
-        match fs::read_to_string(&path) {
+        match read_text_bounded(&path, MAX_TEXT_BYTES) {
             Ok(content) => {
                 self.doc = parse_fountain(&content, self.doc.settings.script_language);
                 self.undo.clear();
@@ -413,7 +420,7 @@ impl DramApp {
             path.set_extension("fountain");
         }
         let content = serialize_fountain(&self.doc);
-        if let Err(err) = fs::write(&path, content) {
+        if let Err(err) = write_atomic_bytes(&path, content.as_bytes()) {
             let mut args = FluentArgs::new();
             args.set("reason", err.to_string());
             self.status_error = Some(self.i18n.t_args("error-save-failed", &args));
@@ -560,6 +567,9 @@ impl DramApp {
                                 Some(self.print_page_range_input.trim().to_string())
                             };
                         let profile = LayoutProfile::for_page_size(self.doc.settings.page_size);
+                        if let Some(old) = self.last_print_pdf.take() {
+                            let _ = fs::remove_file(old);
+                        }
                         match print_document(&self.doc, &profile, &self.print_options) {
                             Ok(pdf_path) => {
                                 self.last_print_pdf = Some(pdf_path);
@@ -577,10 +587,16 @@ impl DramApp {
 
                     if ui.button(self.i18n.t("print-open-viewer")).clicked() {
                         let profile = LayoutProfile::for_page_size(self.doc.settings.page_size);
-                        let path_res = if let Some(existing) = &self.last_print_pdf {
+                        let path_res = if let Some(existing) =
+                            self.last_print_pdf.as_ref().filter(|p| p.exists())
+                        {
                             Ok(existing.clone())
                         } else {
-                            render_temp_pdf(&self.doc, &profile)
+                            let res = render_temp_pdf(&self.doc, &profile);
+                            if let Ok(ref p) = res {
+                                self.last_print_pdf = Some(p.clone());
+                            }
+                            res
                         };
                         match path_res {
                             Ok(path) => {
@@ -594,11 +610,17 @@ impl DramApp {
 
                     if ui.button(self.i18n.t("btn-close")).clicked() {
                         self.show_print_dialog = false;
+                        if let Some(old) = self.last_print_pdf.take() {
+                            let _ = fs::remove_file(old);
+                        }
                     }
                 });
             });
         if !open {
             self.show_print_dialog = false;
+            if let Some(old) = self.last_print_pdf.take() {
+                let _ = fs::remove_file(old);
+            }
         }
     }
 
@@ -2292,16 +2314,32 @@ impl eframe::App for DramApp {
             } else {
                 let _ = remove_recovery(&self.active_recovery_base_path());
                 let _ = remove_recovery(&std::env::temp_dir().join("dram_unsaved.dram"));
+                if let Some(old) = self.last_print_pdf.take() {
+                    let _ = fs::remove_file(old);
+                }
             }
         }
 
-        if self.dirty && self.last_autosave.elapsed() >= Duration::from_secs(15) {
+        if self.dirty
+            && self.last_autosave.elapsed() >= Duration::from_secs(15)
+            && !self.autosave_in_flight.swap(true, Ordering::AcqRel)
+        {
             let base = self.active_recovery_base_path();
-            let _ = write_recovery(&base, &self.doc);
+            let doc_snapshot = self.doc.clone();
+            let flag = Arc::clone(&self.autosave_in_flight);
             self.last_autosave = Instant::now();
+            std::thread::spawn(move || {
+                if let Err(err) = write_recovery(&base, &doc_snapshot) {
+                    eprintln!("[autosave] failed to write recovery: {err}");
+                }
+                flag.store(false, Ordering::Release);
+            });
         }
 
-        theme::apply_theme(ctx, self.dark_theme);
+        if self.applied_dark_theme != Some(self.dark_theme) {
+            theme::apply_theme(ctx, self.dark_theme);
+            self.applied_dark_theme = Some(self.dark_theme);
+        }
         normalize_linux_ime_events(ctx);
 
         self.handle_global_shortcuts(ctx);
@@ -2987,17 +3025,34 @@ fn recent_files_store_path() -> Option<PathBuf> {
     })
 }
 
+const MAX_TEXT_BYTES: u64 = 32 * 1024 * 1024;
+
+fn read_text_bounded(path: &Path, max_bytes: u64) -> std::io::Result<String> {
+    let file = fs::File::open(path)?;
+    let mut buf = Vec::new();
+    let mut limited = file.take(max_bytes.saturating_add(1));
+    limited.read_to_end(&mut buf)?;
+    if (buf.len() as u64) > max_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("file exceeds maximum allowed size of {max_bytes} bytes"),
+        ));
+    }
+    String::from_utf8(buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
 fn load_recent_files() -> Vec<PathBuf> {
     let Some(store) = recent_files_store_path() else {
         return Vec::new();
     };
-    let Ok(raw) = fs::read_to_string(store) else {
+    let Ok(raw) = read_text_bounded(&store, 1024 * 1024) else {
         return Vec::new();
     };
     raw.lines()
         .map(str::trim)
-        .filter(|l| !l.is_empty())
+        .filter(|l| !l.is_empty() && !l.contains('\0'))
         .map(PathBuf::from)
+        .filter(|p| p.is_file())
         .take(8)
         .collect()
 }
@@ -3007,14 +3062,20 @@ fn save_recent_files(paths: &[PathBuf]) {
         return;
     };
     if let Some(parent) = store.parent() {
-        let _ = fs::create_dir_all(parent);
+        if let Err(err) = fs::create_dir_all(parent) {
+            eprintln!("[config] failed to create config dir: {err}");
+            return;
+        }
     }
     let content = paths
         .iter()
         .filter_map(|p| p.to_str())
+        .filter(|s| !s.contains('\n') && !s.contains('\r'))
         .collect::<Vec<_>>()
         .join("\n");
-    let _ = fs::write(store, content);
+    if let Err(err) = write_atomic_bytes(&store, content.as_bytes()) {
+        eprintln!("[config] failed to save recent files: {err}");
+    }
 }
 
 fn user_dict_store_path() -> Option<PathBuf> {
@@ -3036,7 +3097,7 @@ fn load_user_dict() -> String {
     let Some(store) = user_dict_store_path() else {
         return String::new();
     };
-    fs::read_to_string(store).unwrap_or_default()
+    read_text_bounded(&store, 2 * 1024 * 1024).unwrap_or_default()
 }
 
 fn save_user_dict(words: &[String]) {
@@ -3044,9 +3105,20 @@ fn save_user_dict(words: &[String]) {
         return;
     };
     if let Some(parent) = store.parent() {
-        let _ = fs::create_dir_all(parent);
+        if let Err(err) = fs::create_dir_all(parent) {
+            eprintln!("[config] failed to create config dir: {err}");
+            return;
+        }
     }
-    let _ = fs::write(store, words.join("\n"));
+    let cleaned: Vec<&str> = words
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|w| !w.is_empty() && !w.contains('\n') && !w.contains('\r'))
+        .collect();
+    if let Err(err) = write_atomic_bytes(&store, cleaned.join("\n").as_bytes()) {
+        eprintln!("[config] failed to save user dict: {err}");
+    }
 }
 
 #[cfg(test)]

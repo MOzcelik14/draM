@@ -610,7 +610,9 @@ fn parse_emphasis_runs(input: &str) -> Vec<TextRun> {
 
     while i < bytes.len() {
         if bytes[i] == b'\\' && i + 1 < bytes.len() {
-            let next_char = input[i + 1..].chars().next().unwrap();
+            let Some(next_char) = input[i + 1..].chars().next() else {
+                break;
+            };
             current.push(next_char);
             i += 1 + next_char.len_utf8();
             continue;
@@ -642,7 +644,9 @@ fn parse_emphasis_runs(input: &str) -> Vec<TextRun> {
             continue;
         }
 
-        let ch = input[i..].chars().next().unwrap();
+        let Some(ch) = input[i..].chars().next() else {
+            break;
+        };
         current.push(ch);
         i += ch.len_utf8();
     }

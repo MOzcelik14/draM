@@ -2,8 +2,11 @@
 
 #![forbid(unsafe_code)]
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 use dram_core::{
     paginate, Document, InlineStyle, LayoutProfile, LineAlign, PaginatedLine, TextRun, TitlePage,
@@ -56,7 +59,23 @@ struct FontFamily {
     bold_italic: Font,
 }
 
+static CACHED_FONTS: OnceLock<Result<FontFamily, PdfError>> = OnceLock::new();
+static GLYPHS_VERIFIED: OnceLock<Result<(), PdfError>> = OnceLock::new();
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 impl FontFamily {
+    fn cached() -> Result<&'static Self, PdfError> {
+        match CACHED_FONTS.get_or_init(Self::load) {
+            Ok(fonts) => Ok(fonts),
+            Err(err) => Err(match err {
+                PdfError::FontLoad(name) => PdfError::FontLoad(name),
+                PdfError::MissingGlyph { font, ch } => PdfError::MissingGlyph { font, ch: *ch },
+                PdfError::Krilla(m) => PdfError::Krilla(m.clone()),
+                PdfError::Io(e) => PdfError::Krilla(e.to_string()),
+            }),
+        }
+    }
+
     fn load() -> Result<Self, PdfError> {
         Ok(Self {
             regular: Font::new(FONT_REGULAR.to_vec().into(), 0)
@@ -83,6 +102,16 @@ impl FontFamily {
 /// Verifies that all four embedded Courier Prime font faces contain valid glyphs
 /// for every Turkish character in [`REQUIRED_TURKISH_CHARS`].
 pub fn verify_turkish_glyphs() -> Result<(), PdfError> {
+    match GLYPHS_VERIFIED.get_or_init(verify_turkish_glyphs_uncached) {
+        Ok(()) => Ok(()),
+        Err(PdfError::FontLoad(name)) => Err(PdfError::FontLoad(name)),
+        Err(PdfError::MissingGlyph { font, ch }) => Err(PdfError::MissingGlyph { font, ch: *ch }),
+        Err(PdfError::Krilla(m)) => Err(PdfError::Krilla(m.clone())),
+        Err(PdfError::Io(e)) => Err(PdfError::Krilla(e.to_string())),
+    }
+}
+
+fn verify_turkish_glyphs_uncached() -> Result<(), PdfError> {
     let faces = [
         ("CourierPrime-Regular", FONT_REGULAR),
         ("CourierPrime-Bold", FONT_BOLD),
@@ -105,7 +134,7 @@ pub fn verify_turkish_glyphs() -> Result<(), PdfError> {
 /// Renders `doc` to a PDF byte buffer using `profile` and [`dram_core::paginate`].
 pub fn export_pdf_bytes(doc: &Document, profile: &LayoutProfile) -> Result<Vec<u8>, PdfError> {
     verify_turkish_glyphs()?;
-    let fonts = FontFamily::load()?;
+    let fonts = FontFamily::cached()?;
     let (page_w, page_h) = profile.page_dimensions_pt();
     let page_settings = PageSettings::from_wh(page_w, page_h)
         .ok_or_else(|| PdfError::Krilla("invalid page dimensions".to_string()))?;
@@ -114,7 +143,7 @@ pub fn export_pdf_bytes(doc: &Document, profile: &LayoutProfile) -> Result<Vec<u
 
     // 1. Optional separate Title Page
     if has_title_page_content(&doc.title_page) {
-        render_title_page(&mut pdf, page_settings.clone(), doc, profile, &fonts);
+        render_title_page(&mut pdf, page_settings.clone(), doc, profile, fonts);
     }
 
     // 2. Paginated script pages
@@ -138,7 +167,7 @@ pub fn export_pdf_bytes(doc: &Document, profile: &LayoutProfile) -> Result<Vec<u
         }
 
         for line in &page_data.lines {
-            draw_paginated_line(&mut surface, line, profile, page_w, &fonts);
+            draw_paginated_line(&mut surface, line, profile, page_w, fonts);
         }
 
         surface.finish();
@@ -149,18 +178,37 @@ pub fn export_pdf_bytes(doc: &Document, profile: &LayoutProfile) -> Result<Vec<u
         .map_err(|err| PdfError::Krilla(format!("{err:?}")))
 }
 
-/// Renders `doc` to a PDF file at `path`.
+/// Renders `doc` to a PDF file at `path` atomically.
 pub fn export_pdf_file(
     path: &Path,
     doc: &Document,
     profile: &LayoutProfile,
 ) -> Result<(), PdfError> {
     let bytes = export_pdf_bytes(doc, profile)?;
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        fs::create_dir_all(parent)?;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("script.pdf");
+    let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = parent.join(format!(".{file_name}.{}.{seq}.tmp", std::process::id()));
+
+    let res = (|| -> Result<(), PdfError> {
+        let mut f = File::create(&tmp_path)?;
+        f.write_all(&bytes)?;
+        f.sync_all()?;
+        fs::rename(&tmp_path, path)?;
+        Ok(())
+    })();
+    if res.is_err() {
+        let _ = fs::remove_file(&tmp_path);
     }
-    fs::write(path, bytes)?;
-    Ok(())
+    res
 }
 
 fn has_title_page_content(tp: &TitlePage) -> bool {

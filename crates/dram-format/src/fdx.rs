@@ -1,29 +1,31 @@
 //! Final Draft (`.fdx`) XML reader and writer.
 
 use std::fs::File;
-use std::io::{BufReader, Cursor, Read};
+use std::io::{BufReader, Cursor};
 use std::path::Path;
 
 use dram_core::{Document, Element, ElementType, InlineStyle, ScriptLanguage, TextRun};
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 
+use crate::dram_archive::{read_bounded, write_atomic_bytes};
 use crate::error::FormatError;
+
+const MAX_XML_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Loads a Final Draft `.fdx` file from `path`.
 pub fn load_fdx(path: &Path, script_language: ScriptLanguage) -> Result<Document, FormatError> {
     let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-    let mut xml = String::new();
-    reader.read_to_string(&mut xml)?;
+    let reader = BufReader::new(file);
+    let raw = read_bounded(reader, "fdx", MAX_XML_BYTES)?;
+    let xml = String::from_utf8(raw).map_err(|e| FormatError::Xml(e.to_string()))?;
     parse_fdx_xml(&xml, script_language)
 }
 
 /// Saves `doc` as a Final Draft `.fdx` file at `path`.
 pub fn save_fdx(path: &Path, doc: &Document) -> Result<(), FormatError> {
     let xml = serialize_fdx_xml(doc)?;
-    std::fs::write(path, xml)?;
-    Ok(())
+    write_atomic_bytes(path, xml.as_bytes())
 }
 
 /// Parses Final Draft `.fdx` XML into a [`Document`].
@@ -64,9 +66,27 @@ pub fn parse_fdx_xml(xml: &str, script_language: ScriptLanguage) -> Result<Docum
             }
             Ok(Event::Text(e)) if in_text => {
                 let text = e
-                    .unescape()
+                    .xml10_content()
                     .map_err(|err| FormatError::Xml(err.to_string()))?
                     .into_owned();
+                if !text.is_empty() {
+                    push_run(&mut current_runs, text, current_style);
+                }
+            }
+            Ok(Event::GeneralRef(e)) if in_text => {
+                let text = if let Some(ch) = e
+                    .resolve_char_ref()
+                    .map_err(|err| FormatError::Xml(err.to_string()))?
+                {
+                    ch.to_string()
+                } else {
+                    let name = e
+                        .decode()
+                        .map_err(|err| FormatError::Xml(err.to_string()))?;
+                    quick_xml::escape::resolve_predefined_entity(&name)
+                        .unwrap_or(&name)
+                        .to_string()
+                };
                 if !text.is_empty() {
                     push_run(&mut current_runs, text, current_style);
                 }
@@ -174,7 +194,7 @@ fn attr_value(e: &BytesStart<'_>, key: &str) -> Option<String> {
     for attr in e.attributes().flatten() {
         let k = String::from_utf8_lossy(attr.key.as_ref());
         if k.eq_ignore_ascii_case(key) {
-            if let Ok(v) = attr.unescape_value() {
+            if let Ok(v) = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0) {
                 return Some(v.into_owned());
             }
         }

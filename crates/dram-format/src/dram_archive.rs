@@ -55,17 +55,38 @@ pub fn save_dram(path: &Path, doc: &Document) -> Result<(), FormatError> {
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
+    write_atomic_with(parent, path, |file| write_dram_to_writer(file, doc))
+}
+
+/// Atomically writes `bytes` to `path` via a temporary file, `sync_all`, and rename.
+pub fn write_atomic_bytes(path: &Path, bytes: &[u8]) -> Result<(), FormatError> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    write_atomic_with(parent, path, |file| {
+        use std::io::Write;
+        let mut f = file;
+        f.write_all(bytes)?;
+        Ok(())
+    })
+}
+
+fn write_atomic_with<F>(parent: &Path, path: &Path, write_fn: F) -> Result<(), FormatError>
+where
+    F: FnOnce(File) -> Result<(), FormatError>,
+{
     fs::create_dir_all(parent)?;
 
     let file_name = path
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("project.dram");
+        .unwrap_or("project.tmp");
     let tmp_path = parent.join(format!(".{file_name}.{}.tmp", Uuid::new_v4()));
 
     let result = (|| -> Result<(), FormatError> {
         let file = File::create(&tmp_path)?;
-        write_dram_to_writer(file, doc)?;
+        write_fn(file)?;
         // Ensure file contents are flushed to disk before rename.
         let reopened = File::open(&tmp_path)?;
         reopened.sync_all()?;
@@ -205,20 +226,39 @@ pub fn read_dram_from_reader<R: Read + Seek>(reader: R) -> Result<Document, Form
     })
 }
 
+/// Maximum uncompressed size allowed for JSON payloads inside `.dram` archives (32 MiB).
+pub const MAX_JSON_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Reads up to `max_bytes` from `reader`, returning [`FormatError::EntryTooLarge`] if exceeded.
+pub(crate) fn read_bounded<R: Read>(
+    reader: R,
+    entry: &str,
+    max_bytes: u64,
+) -> Result<Vec<u8>, FormatError> {
+    let mut buf = Vec::new();
+    let mut limited = reader.take(max_bytes.saturating_add(1));
+    limited.read_to_end(&mut buf)?;
+    if (buf.len() as u64) > max_bytes {
+        return Err(FormatError::EntryTooLarge {
+            entry: entry.to_string(),
+            max_bytes,
+        });
+    }
+    Ok(buf)
+}
+
 fn read_raw_entry<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     name: &str,
 ) -> Result<Vec<u8>, FormatError> {
-    let mut entry = match archive.by_name(name) {
+    let entry = match archive.by_name(name) {
         Ok(file) => file,
         Err(zip::result::ZipError::FileNotFound) => {
             return Err(FormatError::MissingEntry(name.to_string()));
         }
         Err(err) => return Err(FormatError::Zip(err)),
     };
-    let mut buf = Vec::new();
-    entry.read_to_end(&mut buf)?;
-    Ok(buf)
+    read_bounded(entry, name, MAX_JSON_BYTES)
 }
 
 fn read_json_entry<R: Read + Seek, T: for<'de> Deserialize<'de>>(
@@ -235,13 +275,51 @@ fn read_json_entry<R: Read + Seek, T: for<'de> Deserialize<'de>>(
 /// Sequential schema migration hook for older `.dram` versions (`v0 -> v1`, etc.).
 fn migrate_payloads(
     from_version: u32,
-    _script_raw: &mut Vec<u8>,
-    _notes_raw: &mut Vec<u8>,
-    _settings_raw: &mut Vec<u8>,
+    script_raw: &mut Vec<u8>,
+    notes_raw: &mut Vec<u8>,
+    settings_raw: &mut Vec<u8>,
 ) -> Result<(), FormatError> {
     let mut version = from_version;
     while version < CURRENT_FORMAT_VERSION {
-        // Future migrations (e.g. 1 -> 2) will transform raw JSON Values here.
+        if version == 0 {
+            let mut script_val: serde_json::Value =
+                serde_json::from_slice(script_raw).map_err(|source| FormatError::Json {
+                    entry: ENTRY_SCRIPT.to_string(),
+                    source,
+                })?;
+            if let Some(obj) = script_val.as_object_mut() {
+                obj.entry("elements")
+                    .or_insert_with(|| serde_json::json!([]));
+            }
+            *script_raw = serde_json::to_vec(&script_val).map_err(|source| FormatError::Json {
+                entry: ENTRY_SCRIPT.to_string(),
+                source,
+            })?;
+
+            let mut notes_val: serde_json::Value =
+                serde_json::from_slice(notes_raw).map_err(|source| FormatError::Json {
+                    entry: ENTRY_NOTES.to_string(),
+                    source,
+                })?;
+            if let Some(obj) = notes_val.as_object_mut() {
+                obj.entry("notes").or_insert_with(|| serde_json::json!([]));
+            }
+            *notes_raw = serde_json::to_vec(&notes_val).map_err(|source| FormatError::Json {
+                entry: ENTRY_NOTES.to_string(),
+                source,
+            })?;
+
+            let settings_val: serde_json::Value =
+                serde_json::from_slice(settings_raw).map_err(|source| FormatError::Json {
+                    entry: ENTRY_SETTINGS.to_string(),
+                    source,
+                })?;
+            *settings_raw =
+                serde_json::to_vec(&settings_val).map_err(|source| FormatError::Json {
+                    entry: ENTRY_SETTINGS.to_string(),
+                    source,
+                })?;
+        }
         version += 1;
     }
     Ok(())
@@ -358,5 +436,15 @@ mod tests {
             loaded.notes[0].asset_path.as_deref(),
             Some(asset_key.as_str())
         );
+    }
+
+    #[test]
+    fn read_bounded_rejects_oversized_payload() {
+        let data = vec![b'a'; 128];
+        let err = read_bounded(Cursor::new(data), "script.json", 64).unwrap_err();
+        assert!(matches!(
+            err,
+            FormatError::EntryTooLarge { max_bytes: 64, .. }
+        ));
     }
 }

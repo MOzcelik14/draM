@@ -393,7 +393,10 @@ impl EditorState {
 
                                                 let response = ui.add(edit);
 
-                                                if check_spelling {
+                                                if check_spelling
+                                                    && (response.secondary_clicked()
+                                                        || response.context_menu_opened())
+                                                {
                                                     if let Some(checker) = spell {
                                                         let mut replace_req: Option<(String, String)> =
                                                             None;

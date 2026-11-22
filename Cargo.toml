@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["draM. Contributors"]
@@ -30,7 +30,7 @@ anyhow = "1.0"
 uuid = { version = "1.11", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 unicode-segmentation = "1.12"
-zip = { version = "2.2", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 fluent-bundle = "0.15"
 unic-langid = "0.9"
 sys-locale = "0.3"
@@ -38,4 +38,4 @@ eframe = "0.31"
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 krilla = "0.8"
 ttf-parser = "0.25"
-quick-xml = "0.37"
+quick-xml = "0.41"

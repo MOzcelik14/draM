@@ -39,4 +39,13 @@ pub enum FormatError {
     /// XML parsing or serialization error (e.g., `.fadein` Open Screenplay Format).
     #[error("XML error: {0}")]
     Xml(String),
+
+    /// Archive entry or input file exceeds the maximum allowed uncompressed size.
+    #[error("entry `{entry}` exceeds maximum allowed size of {max_bytes} bytes")]
+    EntryTooLarge {
+        /// Archive entry or file name.
+        entry: String,
+        /// Configured size limit in bytes.
+        max_bytes: u64,
+    },
 }

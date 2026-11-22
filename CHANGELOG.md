@@ -2,6 +2,23 @@
 
 Bu proje [Semantic Versioning](https://semver.org/) kurallarını takip eder.
 
+## [1.0.1] - 2026-11-22
+
+Güvenlik, veri bütünlüğü, yazdırma dayanıklılığı ve arayüz performansına odaklanan bakım sürümü.
+
+### Güvenlik ve Dayanıklılık
+- **Bağımlılık Güncellemeleri:** `zip` (`>=9.0.5`, kilitli `9.8.1`) ve `quick-xml` (`>=0.41.0`) sürümlerine yükseltilerek bilinen RustSec zafiyetleri giderildi.
+- **Sınırlandırılmış Okuma (ZIP Bomb / DoS Koruması):** `.dram` JSON girdileri, `.fadein` (`document.xml`), `.fdx` ve `.fountain`/`.txt` dosya okumalarına `32 MiB` boyut sınırı (`read_bounded`) eklendi.
+- **Yazdırma Güvenliği ve Geçici Dosya Hijyeni:** `dram-print` içinde yazıcı adı ve sayfa aralığı doğrulaması, Unix'te `0600` izinli geçici PDF oluşturma, Windows PowerShell çağrısında çevre değişkeni kullanımı ve yazdırma penceresi/uygulama kapanışında geçici PDF temizliği sağlandı.
+- **Atomik Dışa Aktarım ve Şema Göçü:** `.fdx`, `.fadein`, `.fountain`, `.pdf` ve yapılandırma dosyaları geçici dosya + `sync_all` + `rename` ile atomik yazıma geçirildi; `.dram` için `v0 -> v1` yük normalizasyonu eklendi.
+
+### Performans ve CI
+- **PDF Font Önbelleği:** `dram-pdf` font yükleme ve Türkçe glif doğrulaması `OnceLock` ile önbelleğe alındı.
+- **Arayüz Akıcılığı:** Otomatik kurtarma kaydı arka plan iş parçacığına taşındı, tema uygulaması yalnızca değişimde çalıştırıldı ve yazım denetimi bağlam menüsü açılışıyla sınırlandırıldı.
+- **CI:** GitHub Actions iş akışına `macos-ci` derleme ve test işi eklendi.
+
+---
+
 ## [1.0.0] - 2026-11-21
 
 İlk kararlı sürüm. `draM.`, Türkçe ve İngilizce senaryo yazımı için saf Rust (`#![forbid(unsafe_code)]`) ile geliştirilmiş tam donanımlı masaüstü senaryo editörü olarak yayınlandı.

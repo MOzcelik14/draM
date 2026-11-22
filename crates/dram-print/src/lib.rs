@@ -7,11 +7,13 @@
 
 #![forbid(unsafe_code)]
 
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use dram_core::{Document, LayoutProfile};
-use dram_pdf::{export_pdf_file, PdfError};
+use dram_pdf::{export_pdf_bytes, PdfError};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -89,10 +91,47 @@ pub fn parse_lpstat_output(stdout: &str) -> Vec<String> {
         .collect()
 }
 
-/// Renders `doc` to a temporary PDF file.
+/// Validates a CUPS/system printer name against flag-injection and control characters.
+fn validate_printer_name(printer: &str) -> Result<&str, String> {
+    let trimmed = printer.trim();
+    if trimmed.is_empty() {
+        return Err("printer name must not be empty".to_string());
+    }
+    if trimmed.starts_with('-') || trimmed.chars().any(|c| c.is_control()) {
+        return Err(format!("invalid printer name `{trimmed}`"));
+    }
+    Ok(trimmed)
+}
+
+/// Validates a print page range string (e.g., `"1-5,8"`).
+fn validate_page_range(range: &str) -> Result<String, String> {
+    let compact: String = range.chars().filter(|c| !c.is_whitespace()).collect();
+    if compact.is_empty()
+        || compact.starts_with('-')
+        || !compact
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, ',' | '-'))
+    {
+        return Err(format!("invalid page range `{}`", range.trim()));
+    }
+    Ok(compact)
+}
+
+/// Renders `doc` to a temporary PDF file with restricted permissions (`0600` on Unix).
 pub fn render_temp_pdf(doc: &Document, profile: &LayoutProfile) -> Result<PathBuf, PrintError> {
+    let bytes = export_pdf_bytes(doc, profile)?;
     let tmp_path = std::env::temp_dir().join(format!("dram_print_{}.pdf", Uuid::new_v4()));
-    export_pdf_file(&tmp_path, doc, profile)?;
+
+    let mut opts = OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+
+    let mut file = opts.open(&tmp_path).map_err(PdfError::Io)?;
+    file.write_all(&bytes).map_err(PdfError::Io)?;
     Ok(tmp_path)
 }
 
@@ -115,7 +154,11 @@ pub fn print_document(
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn submit_pdf_to_os(pdf_path: &Path, options: &PrintOptions) -> Result<(), String> {
     let mut cmd = Command::new("lp");
-    if let Some(printer) = options.printer.as_deref().filter(|s| !s.trim().is_empty()) {
+    let validated_printer = match options.printer.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(p) => Some(validate_printer_name(p)?),
+        None => None,
+    };
+    if let Some(printer) = validated_printer {
         cmd.arg("-d").arg(printer);
     }
     let copies = options.copies.max(1);
@@ -126,9 +169,10 @@ fn submit_pdf_to_os(pdf_path: &Path, options: &PrintOptions) -> Result<(), Strin
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        cmd.arg("-P").arg(range);
+        let validated_range = validate_page_range(range)?;
+        cmd.arg("-P").arg(validated_range);
     }
-    cmd.arg(pdf_path);
+    cmd.arg("--").arg(pdf_path);
 
     match cmd.output() {
         Ok(out) if out.status.success() => Ok(()),
@@ -136,10 +180,10 @@ fn submit_pdf_to_os(pdf_path: &Path, options: &PrintOptions) -> Result<(), Strin
             let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
             // Fallback attempt with `lpr` if `lp` failed
             let mut lpr = Command::new("lpr");
-            if let Some(printer) = options.printer.as_deref().filter(|s| !s.trim().is_empty()) {
+            if let Some(printer) = validated_printer {
                 lpr.arg("-P").arg(printer);
             }
-            lpr.arg(format!("-#{copies}")).arg(pdf_path);
+            lpr.arg(format!("-#{copies}")).arg("--").arg(pdf_path);
             if let Ok(lpr_out) = lpr.output() {
                 if lpr_out.status.success() {
                     return Ok(());
@@ -157,18 +201,20 @@ fn submit_pdf_to_os(pdf_path: &Path, options: &PrintOptions) -> Result<(), Strin
 
 #[cfg(target_os = "windows")]
 fn submit_pdf_to_os(pdf_path: &Path, options: &PrintOptions) -> Result<(), String> {
-    let escaped = pdf_path.to_string_lossy().replace('\'', "''");
+    let mut cmd = Command::new("powershell");
+    cmd.args(["-NoProfile", "-WindowStyle", "Hidden", "-Command"]);
+    cmd.env("DRAM_PRINT_FILE", pdf_path);
+
     let script = if let Some(printer) = options.printer.as_deref().filter(|s| !s.trim().is_empty())
     {
-        let p_esc = printer.replace('\'', "''");
-        format!("Start-Process -FilePath '{escaped}' -Verb PrintTo -ArgumentList '\"{p_esc}\"'")
+        let validated = validate_printer_name(printer)?;
+        cmd.env("DRAM_PRINTER", validated);
+        "Start-Process -FilePath $env:DRAM_PRINT_FILE -Verb PrintTo -ArgumentList $env:DRAM_PRINTER"
     } else {
-        format!("Start-Process -FilePath '{escaped}' -Verb Print")
+        "Start-Process -FilePath $env:DRAM_PRINT_FILE -Verb Print"
     };
-    match Command::new("powershell")
-        .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
-        .output()
-    {
+
+    match cmd.arg(script).output() {
         Ok(out) if out.status.success() => Ok(()),
         Ok(out) => {
             let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -234,5 +280,14 @@ printer Canon_PIXMA disabled since Tue 10 Nov 2026 -
         let path = render_temp_pdf(&doc, &LayoutProfile::for_page_size(PageSize::A4)).unwrap();
         assert!(path.exists());
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn print_option_validation_rejects_flag_injection() {
+        assert_eq!(validate_page_range(" 1 - 5, 8 ").unwrap(), "1-5,8");
+        assert!(validate_page_range("-1").is_err());
+        assert!(validate_page_range("1;rm -rf /").is_err());
+        assert!(validate_printer_name("-o evil").is_err());
+        assert_eq!(validate_printer_name("HP_LaserJet").unwrap(), "HP_LaserJet");
     }
 }
