@@ -748,4 +748,75 @@ Ben de buradayım!
         assert_eq!(doc.elements.len(), 1);
         assert_eq!(doc.elements[0].plain_text(), "*yıldızlı* normal");
     }
+
+    #[test]
+    fn fountain_11_fixture_covers_forced_elements_and_notes_round_trip() {
+        let fixture = "\
+Title: _BÜYÜK FİLM_
+Credit: Written by
+Author: Ada Lovelace
+Draft date: 2026-11-25
+Contact:
+    İstanbul, Türkiye
+    ada@example.com
+
+## İkinci Perde
+
+= Kahraman yola çıkar.
+
+.ÖZEL SAHNE BAŞLIĞI #12B#
+
+!AKSİYON SATIRI
+
+@McLANE
+(fısıldayarak)
+**Dikkatli** ol, _hemen_ çık!
+
+~ Bir şarkı mırıldanır
+
+> KESME.
+
+> SON <
+
+===
+";
+        let doc = parse_fountain(fixture, ScriptLanguage::Tr);
+        assert_eq!(doc.title_page.title, "_BÜYÜK FİLM_");
+        assert!(doc.title_page.contact.contains("İstanbul, Türkiye"));
+        assert!(doc
+            .elements
+            .iter()
+            .any(|e| e.kind == ElementType::SceneHeading
+                && e.scene_number.as_ref().map(|n| n.value.as_str()) == Some("12B")));
+        assert!(doc
+            .elements
+            .iter()
+            .any(|e| e.kind == ElementType::Character && e.plain_text() == "McLANE"));
+
+        let serialized = serialize_fountain(&doc);
+        let reparsed = parse_fountain(&serialized, ScriptLanguage::Tr);
+        assert_eq!(reparsed.elements.len(), doc.elements.len());
+        for (a, b) in doc.elements.iter().zip(reparsed.elements.iter()) {
+            assert_eq!(a.kind, b.kind);
+            assert_eq!(a.plain_text(), b.plain_text());
+        }
+    }
+
+    #[test]
+    fn fountain_preserves_shot_and_general_text_as_action_fallback() {
+        // Fountain 1.1 has no native Shot or General syntax; dram-format preserves their text
+        // cleanly and falls back to Action on re-parse.
+        let mut doc = Document::new(ScriptLanguage::En);
+        doc.elements = vec![
+            Element::new(ElementType::Shot, "CLOSE ON THE KEY"),
+            Element::new(ElementType::General, "Genel not paragrafı."),
+        ];
+        let exported = serialize_fountain(&doc);
+        let reparsed = parse_fountain(&exported, ScriptLanguage::En);
+        assert_eq!(reparsed.elements.len(), 2);
+        assert_eq!(reparsed.elements[0].plain_text(), "CLOSE ON THE KEY");
+        assert_eq!(reparsed.elements[0].kind, ElementType::Action);
+        assert_eq!(reparsed.elements[1].plain_text(), "Genel not paragrafı.");
+        assert_eq!(reparsed.elements[1].kind, ElementType::Action);
+    }
 }

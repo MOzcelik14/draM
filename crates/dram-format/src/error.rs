@@ -48,4 +48,20 @@ pub enum FormatError {
         /// Configured size limit in bytes.
         max_bytes: u64,
     },
+
+    /// Total uncompressed archive size exceeds the configured safety limit.
+    #[error("archive total uncompressed size exceeds maximum allowed {max_bytes} bytes")]
+    ArchiveTooLarge {
+        /// Configured total uncompressed size limit in bytes.
+        max_bytes: u64,
+    },
+
+    /// Archive declares more embedded assets than the configured safety limit.
+    #[error("archive contains {count} embedded assets, exceeding maximum of {max_count}")]
+    TooManyAssets {
+        /// Declared asset count.
+        count: usize,
+        /// Configured maximum asset count.
+        max_count: usize,
+    },
 }

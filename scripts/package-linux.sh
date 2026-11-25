@@ -33,11 +33,15 @@ mkdir -p \
   "${DEB_STAGE}/usr/bin" \
   "${DEB_STAGE}/usr/share/applications" \
   "${DEB_STAGE}/usr/share/icons/hicolor/scalable/apps" \
+  "${DEB_STAGE}/usr/share/metainfo" \
+  "${DEB_STAGE}/usr/share/mime/packages" \
   "${DEB_STAGE}/usr/share/doc/dram"
 
 cp "${BIN_PATH}" "${DEB_STAGE}/usr/bin/dram"
 chmod 0755 "${DEB_STAGE}/usr/bin/dram"
 cp assets/logo-mark.svg "${DEB_STAGE}/usr/share/icons/hicolor/scalable/apps/dram.svg"
+cp assets/io.github.mozcelik14.dram.metainfo.xml "${DEB_STAGE}/usr/share/metainfo/"
+cp assets/dram-mime.xml "${DEB_STAGE}/usr/share/mime/packages/"
 cp README.md FORMAT.md "${DEB_STAGE}/usr/share/doc/dram/"
 
 cat > "${DEB_STAGE}/usr/share/applications/dram.desktop" <<'DESKTOP'
@@ -73,6 +77,8 @@ if command -v rpmbuild >/dev/null 2>&1; then
   mkdir -p "${RPM_TOP}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
   cp "${BIN_PATH}" "${RPM_TOP}/SOURCES/dram"
   cp assets/logo-mark.svg "${RPM_TOP}/SOURCES/dram.svg"
+  cp assets/io.github.mozcelik14.dram.metainfo.xml "${RPM_TOP}/SOURCES/"
+  cp assets/dram-mime.xml "${RPM_TOP}/SOURCES/"
   cp README.md FORMAT.md "${RPM_TOP}/SOURCES/"
 
   cat > "${RPM_TOP}/SPECS/dram.spec" <<SPEC
@@ -94,10 +100,14 @@ rm -rf %{buildroot}
 mkdir -p %{buildroot}%{_bindir}
 mkdir -p %{buildroot}%{_datadir}/applications
 mkdir -p %{buildroot}%{_datadir}/icons/hicolor/scalable/apps
+mkdir -p %{buildroot}%{_datadir}/metainfo
+mkdir -p %{buildroot}%{_datadir}/mime/packages
 mkdir -p %{buildroot}%{_datadir}/doc/dram
 
 install -m 0755 "%{_sourcedir}/dram" %{buildroot}%{_bindir}/dram
 install -m 0644 "%{_sourcedir}/dram.svg" %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/dram.svg
+install -m 0644 "%{_sourcedir}/io.github.mozcelik14.dram.metainfo.xml" %{buildroot}%{_datadir}/metainfo/io.github.mozcelik14.dram.metainfo.xml
+install -m 0644 "%{_sourcedir}/dram-mime.xml" %{buildroot}%{_datadir}/mime/packages/dram-mime.xml
 install -m 0644 "%{_sourcedir}/README.md" %{buildroot}%{_datadir}/doc/dram/README.md
 install -m 0644 "%{_sourcedir}/FORMAT.md" %{buildroot}%{_datadir}/doc/dram/FORMAT.md
 
@@ -117,6 +127,8 @@ DESKTOP
 %{_bindir}/dram
 %{_datadir}/applications/dram.desktop
 %{_datadir}/icons/hicolor/scalable/apps/dram.svg
+%{_datadir}/metainfo/io.github.mozcelik14.dram.metainfo.xml
+%{_datadir}/mime/packages/dram-mime.xml
 %{_datadir}/doc/dram/README.md
 %{_datadir}/doc/dram/FORMAT.md
 SPEC

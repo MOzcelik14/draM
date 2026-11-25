@@ -197,7 +197,6 @@ impl EditorState {
 
         let total_elements = doc.elements.len();
         let (window_start, window_end) = compute_element_window(total_elements, self.focused_index);
-        const EST_ROW_HEIGHT: f32 = 28.0;
 
         let mut action_after_loop: Option<EditorAction> = None;
         let mut focused_rect: Option<egui::Rect> = None;
@@ -225,7 +224,10 @@ impl EditorState {
                                 ui.set_min_height(680.0);
 
                                 if window_start > 0 {
-                                    ui.add_space(window_start as f32 * EST_ROW_HEIGHT);
+                                    ui.add_space(estimate_slice_height(
+                                        &doc.elements[..window_start],
+                                        content_width,
+                                    ));
                                 }
 
                                 for idx in window_start..window_end {
@@ -392,6 +394,15 @@ impl EditorState {
                                                     );
 
                                                 let response = ui.add(edit);
+                                                let a11y_label =
+                                                    i18n.t(element_type_i18n_key(kind));
+                                                response.widget_info(|| {
+                                                    egui::WidgetInfo::text_edit(
+                                                        ui.is_enabled(),
+                                                        a11y_label.clone(),
+                                                        text.as_str(),
+                                                    )
+                                                });
 
                                                 if check_spelling
                                                     && (response.secondary_clicked()
@@ -579,9 +590,10 @@ impl EditorState {
                                 }
 
                                 if window_end < total_elements {
-                                    ui.add_space(
-                                        (total_elements - window_end) as f32 * EST_ROW_HEIGHT,
-                                    );
+                                    ui.add_space(estimate_slice_height(
+                                        &doc.elements[window_end..],
+                                        content_width,
+                                    ));
                                 }
                             });
                         });
@@ -1191,6 +1203,40 @@ pub fn compute_element_window(total: usize, focused_index: usize) -> (usize, usi
     (start, end)
 }
 
+/// Estimates the rendered vertical height (in logical pixels) of a single screenplay element
+/// for off-screen virtualization spacers so scroll positions remain stable.
+#[must_use]
+pub fn estimate_element_height(el: &Element, content_width: f32) -> f32 {
+    if el.kind == ElementType::PageBreak {
+        return 26.0;
+    }
+    let (left_indent, right_indent, _) = element_layout(el.kind);
+    let field_width = (content_width - 34.0 - 20.0 - left_indent - right_indent).max(120.0);
+    let chars_per_line = (field_width / 9.0).floor().max(12.0) as usize;
+
+    let mut total_lines = 0usize;
+    for segment in el.plain_text().split('\n') {
+        let len = segment.chars().count().max(1);
+        total_lines += len.div_ceil(chars_per_line);
+    }
+    let lines = total_lines.max(1) as f32;
+    let extra_pad = match el.kind {
+        ElementType::SceneHeading | ElementType::Section(_) => 10.0,
+        ElementType::Character => 6.0,
+        _ => 4.0,
+    };
+    lines * 20.0 + 6.0 + extra_pad
+}
+
+/// Estimates the cumulative vertical height of an off-screen element slice.
+#[must_use]
+pub fn estimate_slice_height(elements: &[Element], content_width: f32) -> f32 {
+    elements
+        .iter()
+        .map(|el| estimate_element_height(el, content_width))
+        .sum()
+}
+
 /// Updates `old_runs` with `final_text` while preserving existing [`InlineStyle`]s
 /// on single-run elements and untouched prefix/suffix runs on multi-run elements.
 #[must_use]
@@ -1407,5 +1453,18 @@ mod tests {
         ));
         assert_eq!(doc.elements[0].runs.len(), 1);
         assert!(!doc.elements[0].runs[0].style.bold);
+    }
+
+    #[test]
+    fn estimate_element_height_scales_with_wrapped_lines() {
+        let short_el = Element::new(ElementType::Action, "Kısa satır.");
+        let long_el = Element::new(
+            ElementType::Action,
+            "Bu oldukça uzun bir aksiyon paragrafıdır ve dar kağıt genişliğinde birden fazla satıra sarılmalıdır. "
+                .repeat(4),
+        );
+        let h_short = estimate_element_height(&short_el, 700.0);
+        let h_long = estimate_element_height(&long_el, 700.0);
+        assert!(h_long > h_short * 3.0);
     }
 }

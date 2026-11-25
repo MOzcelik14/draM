@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.mozcelik14.dram</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>draM.</name>
+  <summary>Desktop screenplay writing application with first-class Turkish and English support</summary>
+  <summary xml:lang="tr">Türkçe ve İngilizce odaklı masaüstü senaryo yazım uygulaması</summary>
+  <description>
+    <p>
+      draM. is a native, offline-first screenplay writer built in pure Rust as part of the prisM. Suite.
+      It supports industry-standard pagination, dual dialogue, revision marks, beat board index cards,
+      built-in Turkish/English spellchecking, vector PDF export, and .dram, .fountain, .fdx, and .fadein formats.
+    </p>
+    <p xml:lang="tr">
+      draM., prisM. Suite bünyesinde saf Rust ile geliştirilmiş çevrimdışı öncelikli bir masaüstü senaryo yazım uygulamasıdır.
+      Standart sayfalama, ikili diyalog, revizyon işaretleri, indeks kartları (Beat Board), Türkçe/İngilizce yazım denetimi,
+      vektör PDF ihracı ve .dram, .fountain, .fdx, .fadein formatlarını destekler.
+    </p>
+  </description>
+  <launchable type="desktop-id">dram.desktop</launchable>
+  <url type="homepage">https://github.com/MOzcelik14/draM</url>
+  <url type="bugtracker">https://github.com/MOzcelik14/draM/issues</url>
+  <provides>
+    <binary>dram</binary>
+    <mediatype>application/x-dram</mediatype>
+  </provides>
+  <content_rating type="oars-1.1" />
+</component>

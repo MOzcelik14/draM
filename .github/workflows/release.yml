@@ -160,8 +160,49 @@ jobs:
           PLIST
 
           ln -s /Applications "${DMG_STAGE}/Applications"
-          hdiutil create -volname "draM. ${VER}" -srcfolder "${DMG_STAGE}" -ov -format UDZO "dist/draM-${VER}-macos-$(uname -m).dmg"
+
+          if [[ -n "${APPLE_CERTIFICATE_BASE64:-}" && -n "${APPLE_CERTIFICATE_PASSWORD:-}" && -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+            KEYCHAIN_PATH="${RUNNER_TEMP}/dram-signing.keychain-db"
+            KEYCHAIN_PASS="$(uuidgen)"
+            CERT_PATH="${RUNNER_TEMP}/dram-cert.p12"
+            echo "${APPLE_CERTIFICATE_BASE64}" | base64 --decode > "${CERT_PATH}"
+            security create-keychain -p "${KEYCHAIN_PASS}" "${KEYCHAIN_PATH}"
+            security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+            security unlock-keychain -p "${KEYCHAIN_PASS}" "${KEYCHAIN_PATH}"
+            security import "${CERT_PATH}" -P "${APPLE_CERTIFICATE_PASSWORD}" -A -t cert -f pkcs12 -k "${KEYCHAIN_PATH}"
+            security list-keychains -d user -s "${KEYCHAIN_PATH}"
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASS}" "${KEYCHAIN_PATH}"
+
+            codesign --deep --force --options runtime --timestamp --sign "${APPLE_SIGNING_IDENTITY}" "${APP_DIR}"
+            codesign --verify --deep --strict --verbose=2 "${APP_DIR}"
+          else
+            echo "::notice::Apple Developer ID signing secrets not configured; skipping .app codesign."
+          fi
+
+          DMG_OUT="dist/draM-${VER}-macos-$(uname -m).dmg"
+          hdiutil create -volname "draM. ${VER}" -srcfolder "${DMG_STAGE}" -ov -format UDZO "${DMG_OUT}"
           rm -rf "${DMG_STAGE}"
+
+          if [[ -n "${APPLE_SIGNING_IDENTITY:-}" && -n "${APPLE_CERTIFICATE_BASE64:-}" ]]; then
+            codesign --force --timestamp --sign "${APPLE_SIGNING_IDENTITY}" "${DMG_OUT}"
+            if [[ -n "${APPLE_ID:-}" && -n "${APPLE_TEAM_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]]; then
+              xcrun notarytool submit "${DMG_OUT}" \
+                --apple-id "${APPLE_ID}" \
+                --team-id "${APPLE_TEAM_ID}" \
+                --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
+                --wait
+              xcrun stapler staple "${DMG_OUT}"
+            else
+              echo "::notice::Apple notarization credentials not configured; skipping xcrun notarytool."
+            fi
+          fi
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
       - uses: actions/upload-artifact@v4
         with:
           name: dram-macos-package

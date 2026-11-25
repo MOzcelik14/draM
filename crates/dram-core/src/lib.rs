@@ -25,4 +25,4 @@ pub use reports::{
 };
 pub use spell::{BuiltinSpellChecker, NoopSpellChecker, SpellChecker};
 pub use templates::{document_from_template, ProjectTemplate};
-pub use undo::{EditCommand, UndoManager};
+pub use undo::{EditCommand, UndoLimits, UndoManager};

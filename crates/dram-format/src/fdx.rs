@@ -290,4 +290,46 @@ mod tests {
             assert_eq!(a.plain_text(), b.plain_text());
         }
     }
+
+    #[test]
+    fn fdx_round_trip_preserves_shot_general_inline_styles_and_entities() {
+        let mut doc = Document::new(ScriptLanguage::Tr);
+        let mut styled_dialogue = Element::new(ElementType::Dialogue, "");
+        styled_dialogue.runs = vec![
+            TextRun {
+                text: "Kalın & ".to_string(),
+                style: InlineStyle {
+                    bold: true,
+                    italic: false,
+                    underline: false,
+                },
+            },
+            TextRun {
+                text: "<İtalik>".to_string(),
+                style: InlineStyle {
+                    bold: false,
+                    italic: true,
+                    underline: true,
+                },
+            },
+        ];
+
+        doc.elements = vec![
+            Element::new(ElementType::SceneHeading, "DIŞ. KÖPRÜ - GECE"),
+            Element::new(ElementType::Shot, "YAKIN PLAN - SAAT"),
+            Element::new(ElementType::Character, "KEMAL"),
+            Element::new(ElementType::Parenthetical, "(saate bakarak)"),
+            styled_dialogue,
+            Element::new(ElementType::Transition, "KESME."),
+            Element::new(ElementType::General, "Genel yapım notu"),
+        ];
+
+        let xml = serialize_fdx_xml(&doc).unwrap();
+        let parsed = parse_fdx_xml(&xml, ScriptLanguage::Tr).unwrap();
+        assert_eq!(parsed.elements.len(), doc.elements.len());
+        for (a, b) in doc.elements.iter().zip(parsed.elements.iter()) {
+            assert_eq!(a.kind, b.kind);
+            assert_eq!(a.runs, b.runs);
+        }
+    }
 }

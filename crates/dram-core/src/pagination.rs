@@ -859,4 +859,223 @@ mod tests {
         assert!((ayse.y_pt - mehmet.y_pt).abs() < 0.01);
         assert!(ayse.right_x_pt < mehmet.x_pt);
     }
+
+    #[test]
+    fn dual_dialogue_near_page_bottom_moves_cleanly_to_next_page() {
+        let mut doc = Document::new(ScriptLanguage::Tr);
+        doc.elements.clear();
+        for i in 0..48 {
+            doc.elements.push(Element::new(
+                ElementType::Action,
+                format!("Dolgu satırı {i}."),
+            ));
+        }
+
+        let group_id = uuid::Uuid::new_v4();
+        let left_group = Some(DualDialogueGroup {
+            group_id,
+            side: DualSide::Left,
+        });
+        let right_group = Some(DualDialogueGroup {
+            group_id,
+            side: DualSide::Right,
+        });
+
+        let mut c1 = Element::new(ElementType::Character, "LEYLA");
+        c1.dual_dialogue = left_group;
+        let mut d1 = Element::new(
+            ElementType::Dialogue,
+            "Bu ikili diyalog sayfa sonuna sığmayacak kadar uzun bir repliktir.",
+        );
+        d1.dual_dialogue = left_group;
+
+        let mut c2 = Element::new(ElementType::Character, "MECNUN");
+        c2.dual_dialogue = right_group;
+        let mut d2 = Element::new(
+            ElementType::Dialogue,
+            "Evet, ikisi birlikte yeni sayfaya geçmelidir.",
+        );
+        d2.dual_dialogue = right_group;
+
+        doc.elements.extend([c1, d1, c2, d2]);
+
+        let paged = paginate(&doc, &LayoutProfile::for_page_size(PageSize::UsLetter));
+        assert!(paged.page_count() >= 2);
+        let p2_lines = &paged.pages[1].lines;
+        let leyla = p2_lines
+            .iter()
+            .find(|l| l.runs.iter().any(|r| r.text.contains("LEYLA")))
+            .expect("LEYLA on page 2");
+        let mecnun = p2_lines
+            .iter()
+            .find(|l| l.runs.iter().any(|r| r.text.contains("MECNUN")))
+            .expect("MECNUN on page 2");
+        assert!((leyla.y_pt - mecnun.y_pt).abs() < 0.01);
+    }
+
+    #[test]
+    fn multi_page_dialogue_repeats_continuation_markers_across_pages() {
+        let mut doc = Document::new(ScriptLanguage::En);
+        doc.elements.clear();
+        doc.elements
+            .push(Element::new(ElementType::Character, "HAMLET"));
+        let speech =
+            "To be, or not to be, that is the question whether tis nobler in the mind to suffer. "
+                .repeat(85);
+        doc.elements
+            .push(Element::new(ElementType::Dialogue, speech));
+
+        let paged = paginate(&doc, &LayoutProfile::for_page_size(PageSize::UsLetter));
+        assert!(paged.page_count() >= 3);
+
+        for page in &paged.pages[..paged.page_count() - 1] {
+            let last_text: String = page
+                .lines
+                .last()
+                .unwrap()
+                .runs
+                .iter()
+                .map(|r| r.text.as_str())
+                .collect();
+            assert_eq!(last_text, "(MORE)");
+        }
+        for page in &paged.pages[1..] {
+            let first_text: String = page.lines[0].runs.iter().map(|r| r.text.as_str()).collect();
+            assert_eq!(first_text, "HAMLET (CONT'D)");
+        }
+    }
+
+    #[test]
+    fn long_character_cue_does_not_drop_text() {
+        let mut doc = Document::new(ScriptLanguage::Tr);
+        doc.elements.clear();
+        let long_cue = "BİRİNCİ İSTASYON KOMUTAN YARDIMCISI VE NÖBETÇİ SUBAY (TELSİZDEN)";
+        doc.elements
+            .push(Element::new(ElementType::Character, long_cue));
+        doc.elements
+            .push(Element::new(ElementType::Dialogue, "Anlaşıldı, merkez."));
+
+        let paged = paginate(&doc, &LayoutProfile::for_page_size(PageSize::UsLetter));
+        assert_eq!(paged.page_count(), 1);
+        let joined: String = paged.pages[0]
+            .lines
+            .iter()
+            .flat_map(|l| l.runs.iter().map(|r| r.text.as_str()))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(joined.contains("KOMUTAN"));
+        assert!(joined.contains("Anlaşıldı"));
+    }
+
+    #[test]
+    fn explicit_page_break_forces_new_page() {
+        let mut doc = Document::new(ScriptLanguage::Tr);
+        doc.elements.clear();
+        doc.elements
+            .push(Element::new(ElementType::Action, "İlk sayfa metni."));
+        doc.elements.push(Element::new(ElementType::PageBreak, ""));
+        doc.elements
+            .push(Element::new(ElementType::Action, "İkinci sayfa metni."));
+
+        let paged = paginate(&doc, &LayoutProfile::for_page_size(PageSize::UsLetter));
+        assert_eq!(paged.page_count(), 2);
+        assert!(paged.pages[0]
+            .lines
+            .iter()
+            .any(|l| l.runs.iter().any(|r| r.text.contains("İlk sayfa"))));
+        assert!(paged.pages[1]
+            .lines
+            .iter()
+            .any(|l| l.runs.iter().any(|r| r.text.contains("İkinci sayfa"))));
+    }
+
+    #[test]
+    fn long_action_paragraph_splits_across_pages_without_data_loss() {
+        let mut doc = Document::new(ScriptLanguage::Tr);
+        doc.elements.clear();
+        let long_action = (0..140)
+            .map(|i| format!("Aksiyon cümlesi numara {i} yağmur altında devam ediyor."))
+            .collect::<Vec<_>>()
+            .join(" ");
+        doc.elements
+            .push(Element::new(ElementType::Action, long_action));
+
+        let paged = paginate(&doc, &LayoutProfile::for_page_size(PageSize::UsLetter));
+        assert!(paged.page_count() >= 2);
+        let all_text: String = paged
+            .pages
+            .iter()
+            .flat_map(|p| p.lines.iter())
+            .flat_map(|l| l.runs.iter().map(|r| r.text.as_str()))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(all_text.contains("numara 0"));
+        assert!(all_text.contains("numara 139"));
+    }
+
+    #[test]
+    fn scene_heading_before_dialogue_keeps_heading_off_bottom_orphan() {
+        let mut doc = Document::new(ScriptLanguage::Tr);
+        doc.elements.clear();
+        for i in 0..50 {
+            doc.elements
+                .push(Element::new(ElementType::Action, format!("Satır {i}.")));
+        }
+        doc.elements.push(Element::new(
+            ElementType::SceneHeading,
+            "DIŞ. İSKELE - GECE",
+        ));
+        doc.elements
+            .push(Element::new(ElementType::Character, "DENİZ"));
+        doc.elements
+            .push(Element::new(ElementType::Dialogue, "Vapur yanaşıyor."));
+
+        let paged = paginate(&doc, &LayoutProfile::for_page_size(PageSize::UsLetter));
+        assert!(paged.page_count() >= 2);
+        let p1_last_text: String = paged.pages[0]
+            .lines
+            .last()
+            .unwrap()
+            .runs
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect();
+        assert!(!p1_last_text.contains("DIŞ. İSKELE"));
+    }
+
+    #[test]
+    fn revision_marks_are_preserved_across_dialogue_continuation() {
+        let mut doc = Document::new(ScriptLanguage::Tr);
+        doc.elements.clear();
+        for i in 0..24 {
+            doc.elements
+                .push(Element::new(ElementType::Action, format!("Önceki {i}.")));
+        }
+        let mut ch = Element::new(ElementType::Character, "ZEYNEP");
+        ch.revision = Some(crate::RevisionMark {
+            color: "blue".to_string(),
+            label: String::new(),
+        });
+        let mut dlg = Element::new(
+            ElementType::Dialogue,
+            "Bu revizyonlu replik sayfa sonuna denk geldiği için iki sayfaya bölünmelidir. "
+                .repeat(6),
+        );
+        dlg.revision = Some(crate::RevisionMark {
+            color: "blue".to_string(),
+            label: String::new(),
+        });
+        doc.elements.extend([ch, dlg]);
+
+        let paged = paginate(&doc, &LayoutProfile::for_page_size(PageSize::UsLetter));
+        assert!(paged.page_count() >= 2);
+        assert!(paged.pages[0].lines.iter().any(|l| l.has_revision));
+        assert!(paged.pages[1].lines.iter().any(|l| l.has_revision));
+        let p2_first: String = paged.pages[1].lines[0]
+            .runs
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect();
+        assert_eq!(p2_first, "ZEYNEP (DEVAM)");
+    }
 }

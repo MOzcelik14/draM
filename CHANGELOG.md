@@ -2,6 +2,26 @@
 
 Bu proje [Semantic Versioning](https://semver.org/) kurallarını takip eder.
 
+## [1.0.2] - 2026-11-25
+
+Veri bütünlüğü, test kapsamı, mimari düzenleme, performans doğrulaması ve platform olgunluğu sürümü.
+
+### Veri Güvenliği ve Dayanıklılık
+- **Autosave / Kayıt Senkronizasyonu:** `RecoveryCoordinator` ve `DramManifest.generation` sayacı ile arka plan otomatik kayıtları ile normal kaydetme/kapanış arasındaki yarış durumu giderildi; kapanışta devam eden autosave beklenip doğrulama yapılıyor.
+- **Atomik `Batch` Undo/Redo ve Sınırlar:** `EditCommand::Batch` kısmi hata durumunda ters sıra rollback uygular hale getirildi; UUID tabanlı komut varyantları, `UndoLimits` bellek/adet sınırı ve `mark_checkpoint` eklendi.
+- **`.dram` Arşiv Güvenliği:** Tekil JSON (`32 MiB`) ve asset (`10 MiB`) sınırlarına ek olarak toplam açılmış arşiv boyutu (`256 MiB`) ve maksimum asset sayısı (`256`) sınırları eklendi.
+
+### Test Altyapısı, Performans ve Mimari
+- **Kapsamlı Test Paketleri:** Pagination edge-case testleri, undo/redo derin zincir ve hata rollback testleri, Fountain 1.1 / FDX uyumluluk testleri, PDF yapısal golden reference testleri, Courier Prime font metric doğrulaması (`verify_font_metrics`) ve Linux Türkçe IME regresyon testleri eklendi.
+- **Modüler `dram-app` Yapısı:** `main.rs` sorumluluklarına göre `app`, `commands`, `dialogs`, `document`, `panels`, `recovery`, `settings` ve `workspace` modüllerine ayrıldı.
+- **Virtualization ve Benchmark:** `editor.rs` içinde sarılan satır sayısına göre off-screen yükseklik tahmini (`estimate_element_height`) iyileştirildi ve 5–500 sayfa sentetik `perf_bench` paketi eklendi.
+
+### Platform ve Erişilebilirlik
+- **Linux & macOS Paketleme:** AppStream metadata (`io.github.mozcelik14.dram.metainfo.xml`) ve MIME XML (`dram-mime.xml`) Linux paketlerine eklendi; `release.yml` içine secret tabanlı macOS `codesign` ve notarization adımları eklendi.
+- **Erişilebilirlik:** Editör metin alanlarına `WidgetInfo::text_edit` ile yerelleştirilmiş eleman türü etiketleri bağlandı.
+
+---
+
 ## [1.0.1] - 2026-11-22
 
 Güvenlik, veri bütünlüğü, yazdırma dayanıklılığı ve arayüz performansına odaklanan bakım sürümü.

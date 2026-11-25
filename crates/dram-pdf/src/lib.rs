@@ -444,6 +444,81 @@ fn draw_text_ltr(
     );
 }
 
+/// Measured Courier Prime font metrics compared against a [`LayoutProfile`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FontMetricsReport {
+    /// Measured monospace character advance width in points at `profile.font_size_pt`.
+    pub measured_char_width_pt: f32,
+    /// Measured natural line height `(ascender - descender) / units_per_em * font_size_pt`.
+    pub measured_line_height_pt: f32,
+    /// Absolute difference between `measured_char_width_pt` and `profile.char_width_pt`.
+    pub char_width_delta_pt: f32,
+}
+
+/// Verifies that all four embedded Courier Prime faces are strictly monospaced
+/// and consistent with `profile.char_width_pt` and `profile.line_height_pt`.
+pub fn verify_font_metrics(profile: &LayoutProfile) -> Result<FontMetricsReport, PdfError> {
+    let faces = [
+        ("CourierPrime-Regular", FONT_REGULAR),
+        ("CourierPrime-Bold", FONT_BOLD),
+        ("CourierPrime-Italic", FONT_ITALIC),
+        ("CourierPrime-BoldItalic", FONT_BOLD_ITALIC),
+    ];
+
+    let mut reference_char_w: Option<f32> = None;
+    let mut reference_line_h: f32 = 0.0;
+
+    for (name, bytes) in faces {
+        let face = Face::parse(bytes, 0).map_err(|_| PdfError::FontLoad(name))?;
+        let upem = f32::from(face.units_per_em().max(1));
+        let scale = profile.font_size_pt / upem;
+
+        for sample in ['M', 'i', 'İ', 'Ş', 'Ğ', ' '] {
+            let gid = face.glyph_index(sample).ok_or(PdfError::MissingGlyph {
+                font: name,
+                ch: sample,
+            })?;
+            let adv = face
+                .glyph_hor_advance(gid)
+                .ok_or(PdfError::FontLoad(name))?;
+            let width_pt = f32::from(adv) * scale;
+            if let Some(expected) = reference_char_w {
+                if (width_pt - expected).abs() > 0.05 {
+                    return Err(PdfError::Krilla(format!(
+                        "non-monospace advance in {name} for '{sample}': {width_pt:.3}pt != {expected:.3}pt"
+                    )));
+                }
+            } else {
+                reference_char_w = Some(width_pt);
+            }
+        }
+
+        let natural_h = f32::from(face.ascender() - face.descender()) * scale;
+        reference_line_h = reference_line_h.max(natural_h);
+    }
+
+    let measured_char_width_pt = reference_char_w.unwrap_or(profile.char_width_pt);
+    let char_width_delta_pt = (measured_char_width_pt - profile.char_width_pt).abs();
+    if char_width_delta_pt > 0.05 {
+        return Err(PdfError::Krilla(format!(
+            "profile char_width_pt ({}) diverges from Courier Prime ({measured_char_width_pt:.3})",
+            profile.char_width_pt
+        )));
+    }
+    if reference_line_h > profile.line_height_pt + 2.0 {
+        return Err(PdfError::Krilla(format!(
+            "natural font height ({reference_line_h:.2}pt) exceeds profile line_height_pt ({})",
+            profile.line_height_pt
+        )));
+    }
+
+    Ok(FontMetricsReport {
+        measured_char_width_pt,
+        measured_line_height_pt: reference_line_h,
+        char_width_delta_pt,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,6 +527,17 @@ mod tests {
     #[test]
     fn courier_prime_supports_all_turkish_glyphs() {
         verify_turkish_glyphs().expect("Courier Prime must support all Turkish characters");
+    }
+
+    #[test]
+    fn courier_prime_metrics_match_layout_profile() {
+        for size in [PageSize::A4, PageSize::UsLetter] {
+            let profile = LayoutProfile::for_page_size(size);
+            let report = verify_font_metrics(&profile)
+                .expect("Courier Prime metrics must match LayoutProfile");
+            assert!(report.char_width_delta_pt <= 0.05);
+            assert!(report.measured_line_height_pt <= profile.line_height_pt + 2.0);
+        }
     }
 
     #[test]
