@@ -878,7 +878,7 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
 name = "dram-app"
-version = "1.0.2"
+version = "2026.11.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -897,7 +897,7 @@ dependencies = [
 
 [[package]]
 name = "dram-core"
-version = "1.0.2"
+version = "2026.11.0"
 dependencies = [
  "chrono",
  "serde",
@@ -908,7 +908,7 @@ dependencies = [
 
 [[package]]
 name = "dram-format"
-version = "1.0.2"
+version = "2026.11.0"
 dependencies = [
  "chrono",
  "dram-core",
@@ -922,7 +922,7 @@ dependencies = [
 
 [[package]]
 name = "dram-pdf"
-version = "1.0.2"
+version = "2026.11.0"
 dependencies = [
  "dram-core",
  "dram-format",
@@ -933,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "dram-print"
-version = "1.0.2"
+version = "2026.11.0"
 dependencies = [
  "dram-core",
  "dram-pdf",
