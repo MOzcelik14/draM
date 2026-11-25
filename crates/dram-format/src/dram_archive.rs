@@ -91,10 +91,11 @@ where
 
     let result = (|| -> Result<(), FormatError> {
         let file = File::create(&tmp_path)?;
+        let sync_handle = file.try_clone()?;
         write_fn(file)?;
         // Ensure file contents are flushed to disk before rename.
-        let reopened = File::open(&tmp_path)?;
-        reopened.sync_all()?;
+        sync_handle.sync_all()?;
+        drop(sync_handle);
         fs::rename(&tmp_path, path)?;
         Ok(())
     })();
@@ -509,9 +510,9 @@ impl RecoveryCoordinator {
 
         let write_res = (|| -> Result<(), FormatError> {
             let file = File::create(&tmp_path)?;
+            let sync_handle = file.try_clone()?;
             write_dram_to_writer_with_generation(file, doc, snapshot_gen)?;
-            let reopened = File::open(&tmp_path)?;
-            reopened.sync_all()?;
+            sync_handle.sync_all()?;
             Ok(())
         })();
 
